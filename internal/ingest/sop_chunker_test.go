@@ -1,0 +1,296 @@
+package ingest
+
+import (
+	"fmt"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// ─── effectiveHeadingLevel ────────────────────────────────────────────────────
+
+func TestEffectiveHeadingLevel_StyledHeadings(t *testing.T) {
+	cases := []struct {
+		style string
+		text  string
+		want  int
+	}{
+		{"Heading1", "SMOKE TEST", 1},
+		{"Heading2", "Check the links", 2},
+		{"Heading3", "Log in as student", 3},
+		{"Heading4", "Sub step", 4},
+		{"Normal", "Regular body text.", 0},
+		{"ListParagraph", "Step one", 0},
+		{"TOC1", "Table of contents entry", 0},
+		{"Company", "Douglas College", 0},
+	}
+	for _, c := range cases {
+		p := DocxParagraph{Style: c.style, Text: c.text}
+		if got := effectiveHeadingLevel(p); got != c.want {
+			t.Errorf("effectiveHeadingLevel(%q, %q) = %d, want %d", c.style, c.text, got, c.want)
+		}
+	}
+}
+
+func TestEffectiveHeadingLevel_NumberedNormal(t *testing.T) {
+	cases := []struct {
+		text string
+		want int
+	}{
+		// Level 1 — top-level numbered sections (SOP154 style)
+		{"1. Purpose", 1},
+		{"2. Scope", 1},
+		{"6. Detailed Procedures", 1},
+		{"10. Appendix", 1},
+		// Level 2 — subsections
+		{"6.1 Access the Server (DEV or PROD)", 2},
+		{"6.2 Stopping Axiom", 2},
+		{"6.3 Starting Axiom", 2},
+		// Not matched — too long (> 80 chars)
+		{"1. This is a very long sentence that exceeds the eighty character threshold and should not be treated as a heading.", 0},
+		// Not matched — ListParagraph style (even if starts with number)
+		// (handled by style check in effectiveHeadingLevel — tested separately below)
+		// Not matched — no digit at start
+		{"TEST SUMMARY", 0},
+		{"Some body paragraph.", 0},
+	}
+	for _, c := range cases {
+		p := DocxParagraph{Style: "Normal", Text: c.text}
+		if got := effectiveHeadingLevel(p); got != c.want {
+			t.Errorf("effectiveHeadingLevel(Normal, %q) = %d, want %d", c.text, got, c.want)
+		}
+	}
+}
+
+func TestEffectiveHeadingLevel_ListParagraphNotHeading(t *testing.T) {
+	// ListParagraph items that start with a number should never be headings
+	// even if they look like "1. Do something"
+	p := DocxParagraph{Style: "ListParagraph", Text: "1. Login to the server"}
+	if got := effectiveHeadingLevel(p); got != 0 {
+		t.Errorf("ListParagraph starting with number should return 0, got %d", got)
+	}
+}
+
+// ─── chunkSop ────────────────────────────────────────────────────────────────
+
+func TestChunkSop_CoverPageDiscarded(t *testing.T) {
+	meta := sopMetadata{number: "1", title: "Test"}
+	paras := []DocxParagraph{
+		{Style: "Company", Text: "Douglas College"},        // skip style
+		{Style: "InformationPage", Text: "Change History"}, // skip style
+		{Style: "Normal", Text: "Pre-heading body text"},   // before first heading — discard
+		{Style: "Heading1", Text: "Section One"},
+		{Style: "Normal", Text: "Section body"},
+	}
+
+	chunks := chunkSop(paras, meta)
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk, got %d", len(chunks))
+	}
+	if chunks[0].SectionTitle != "Section One" {
+		t.Errorf("SectionTitle: got %q, want %q", chunks[0].SectionTitle, "Section One")
+	}
+	if strings.Contains(chunks[0].Text, "Pre-heading body text") {
+		t.Error("cover page body should be discarded")
+	}
+	if strings.Contains(chunks[0].Text, "Douglas College") {
+		t.Error("skip-style content should be discarded")
+	}
+}
+
+func TestChunkSop_BreadcrumbHierarchy(t *testing.T) {
+	meta := sopMetadata{number: "99", title: "My SOP"}
+	paras := []DocxParagraph{
+		{Style: "Heading1", Text: "Chapter One"},
+		{Style: "Normal", Text: "Intro"},
+		{Style: "Heading2", Text: "Sub A"},
+		{Style: "Normal", Text: "Step 1"},
+		{Style: "Heading2", Text: "Sub B"},
+		{Style: "Normal", Text: "Step 2"},
+		{Style: "Heading1", Text: "Chapter Two"},
+		{Style: "Normal", Text: "New chapter body"},
+	}
+
+	chunks := chunkSop(paras, meta)
+
+	// Expected: H1 intro, Sub A, Sub B, Chapter Two
+	if len(chunks) != 4 {
+		t.Fatalf("want 4 chunks, got %d: %v", len(chunks), chunkTitles(chunks))
+	}
+
+	// H1 chunk carries only H1 in breadcrumb
+	assertContains(t, chunks[0].Text, "[SOP 99 — My SOP] > Chapter One")
+	assertNotContains(t, chunks[0].Text, "Sub A")
+
+	// H2 chunk carries H1 > H2
+	assertContains(t, chunks[1].Text, "[SOP 99 — My SOP] > Chapter One > Sub A")
+	assertContains(t, chunks[1].Text, "Step 1")
+
+	// Second H2 — H1 context preserved, H2 updated
+	assertContains(t, chunks[2].Text, "[SOP 99 — My SOP] > Chapter One > Sub B")
+	assertContains(t, chunks[2].Text, "Step 2")
+
+	// New H1 — deeper levels cleared
+	assertContains(t, chunks[3].Text, "[SOP 99 — My SOP] > Chapter Two")
+	assertNotContains(t, chunks[3].Text, "Sub B")
+}
+
+func TestChunkSop_DeeperLevelClearedOnNewH1(t *testing.T) {
+	meta := sopMetadata{number: "1", title: "T"}
+	paras := []DocxParagraph{
+		{Style: "Heading1", Text: "Part A"},
+		{Style: "Heading2", Text: "Section A.1"},
+		{Style: "Heading3", Text: "Detail"},
+		{Style: "Normal", Text: "body"},
+		{Style: "Heading1", Text: "Part B"}, // new H1 — H2 and H3 must clear
+		{Style: "Normal", Text: "part b body"},
+	}
+
+	chunks := chunkSop(paras, meta)
+
+	// Find the Part B chunk
+	var partBChunk *SopChunk
+	for i := range chunks {
+		if chunks[i].SectionTitle == "Part B" {
+			partBChunk = &chunks[i]
+		}
+	}
+	if partBChunk == nil {
+		t.Fatal("no chunk with SectionTitle='Part B'")
+	}
+	assertNotContains(t, partBChunk.Text, "Section A.1")
+	assertNotContains(t, partBChunk.Text, "Detail")
+}
+
+func TestChunkSop_NumberedNormalStyle(t *testing.T) {
+	// Simulates SOP154 which uses Normal paragraphs as section headers
+	meta := sopMetadata{number: "154", title: "Start Stop Axiom"}
+	paras := []DocxParagraph{
+		{Style: "Normal", Text: "1. Purpose"},
+		{Style: "Normal", Text: "This SOP provides steps."},
+		{Style: "Normal", Text: "6. Detailed Procedures"},
+		{Style: "Normal", Text: "6.1 Access the Server"},
+		{Style: "Normal", Text: "- DEV: 10.0.0.1"},
+		{Style: "Normal", Text: "6.2 Stopping Axiom"},
+		{Style: "Normal", Text: "- Notify team."},
+		{Style: "Normal", Text: "- Stop services."},
+	}
+
+	chunks := chunkSop(paras, meta)
+
+	// Expected: 3 chunks.
+	// "6. Detailed Procedures" has no body before "6.1", so it emits no chunk of its own —
+	// it only contributes to the breadcrumb of subsections.
+	if len(chunks) != 3 {
+		t.Fatalf("want 3 chunks, got %d: %v", len(chunks), chunkTitles(chunks))
+	}
+
+	// Purpose chunk
+	assertContains(t, chunks[0].Text, "[SOP 154 — Start Stop Axiom] > 1. Purpose")
+	assertContains(t, chunks[0].Text, "This SOP provides steps.")
+
+	// 6.1 breadcrumb includes parent section 6
+	assertContains(t, chunks[1].Text, "6. Detailed Procedures > 6.1 Access the Server")
+
+	// 6.2 breadcrumb correct
+	assertContains(t, chunks[2].Text, "6. Detailed Procedures > 6.2 Stopping Axiom")
+	assertContains(t, chunks[2].Text, "Notify team.")
+}
+
+func TestChunkSop_EmptyBodySkipped(t *testing.T) {
+	// A heading immediately followed by another heading should not emit an empty chunk.
+	meta := sopMetadata{number: "1", title: "T"}
+	paras := []DocxParagraph{
+		{Style: "Heading1", Text: "H1"},
+		{Style: "Heading2", Text: "H2"}, // no body between H1 and H2
+		{Style: "Normal", Text: "actual content"},
+	}
+
+	chunks := chunkSop(paras, meta)
+
+	if len(chunks) != 1 {
+		t.Fatalf("want 1 chunk (empty H1 body skipped), got %d: %v", len(chunks), chunkTitles(chunks))
+	}
+	assertContains(t, chunks[0].Text, "actual content")
+}
+
+// ─── helpers ─────────────────────────────────────────────────────────────────
+
+func assertContains(t *testing.T, s, sub string) {
+	t.Helper()
+	if !strings.Contains(s, sub) {
+		t.Errorf("expected to contain %q\ngot: %s", sub, s)
+	}
+}
+
+func assertNotContains(t *testing.T, s, sub string) {
+	t.Helper()
+	if strings.Contains(s, sub) {
+		t.Errorf("expected NOT to contain %q\ngot: %s", sub, s)
+	}
+}
+
+func chunkTitles(chunks []SopChunk) []string {
+	titles := make([]string, len(chunks))
+	for i, c := range chunks {
+		titles[i] = c.SectionTitle
+	}
+	return titles
+}
+
+// ─── Real-file integration test ───────────────────────────────────────────────
+
+func TestChunkSop_RealFiles(t *testing.T) {
+	files := []string{
+		"../../data/docs/sop/SOP122 - Smoke Test and Sanity Test Post Banner Upgrade.docx",
+		"../../data/docs/sop/SOP154 - Procedure - Start, Stop Axiom.docx",
+	}
+
+	for _, f := range files {
+		t.Run(filepath.Base(f), func(t *testing.T) {
+			paras, err := extractDocxParagraphs(f)
+			if err != nil {
+				t.Fatalf("extract: %v", err)
+			}
+
+			meta := parseSopFilename(f)
+			if meta.number == "" {
+				t.Fatalf("could not parse SOP number from %s", filepath.Base(f))
+			}
+
+			chunks := chunkSop(paras, meta)
+			if len(chunks) == 0 {
+				t.Fatal("no chunks produced")
+			}
+
+			fmt.Printf("\n===== %s — %d chunks =====\n", filepath.Base(f), len(chunks))
+			for i, c := range chunks {
+				lines := strings.Split(c.Text, "\n")
+				preview := lines[0]
+				if len(lines) > 2 {
+					body := lines[2]
+					if len(body) > 120 {
+						body = body[:120] + "..."
+					}
+					preview += "\n    " + body
+				}
+				if len(lines) > 4 {
+					preview += "\n    [+" + strconv.Itoa(len(lines)-3) + " more lines]"
+				}
+				fmt.Printf("  [%02d] %-40s\n    %s\n\n", i, c.SectionTitle, strings.ReplaceAll(preview, "\n", "\n    "))
+			}
+
+			// Verify breadcrumb is present on every chunk
+			for i, c := range chunks {
+				if !strings.HasPrefix(c.Text, "[SOP "+meta.number) {
+					t.Errorf("chunk %d missing breadcrumb: %q", i, c.Text[:50])
+				}
+				if c.SectionTitle == "" {
+					t.Errorf("chunk %d has empty SectionTitle", i)
+				}
+			}
+		})
+	}
+}

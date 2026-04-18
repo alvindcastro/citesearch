@@ -1,0 +1,24 @@
+info:
+  name: Summarize Compatibility
+  type: http
+  seq: 8
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/summarize/compatibility"
+  body:
+    type: json
+    data: |-
+      {
+        "filename": "Banner_General_Release_Notes_9.3.37.2_8.26.2_February_2026.pdf",
+        "banner_version": "9.3.37.2",
+        "banner_module": "General",
+        "top_k": 10
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

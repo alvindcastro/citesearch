@@ -1,0 +1,24 @@
+info:
+  name: Cross Reference
+  type: http
+  seq: 5
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/student/cross-reference"
+  body:
+    type: json
+    data: |-
+      {
+        "question": "How does the 9.3.37.2 release affect CRN creation in Banner Student?",
+        "top_k": 5,
+        "version_filter": "9.3.37.2",
+        "module_filter": "Student"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

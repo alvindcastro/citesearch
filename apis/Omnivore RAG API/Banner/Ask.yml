@@ -1,0 +1,24 @@
+info:
+  name: Ask (Release Notes)
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/ask"
+  body:
+    type: json
+    data: |-
+      {
+        "question": "What changed in Banner General 9.3.37.2?",
+        "top_k": 5,
+        "module_filter": "General",
+        "mode": "local"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

@@ -1,0 +1,27 @@
+info:
+  name: Ask
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/financial-aid/ask"
+  body:
+    type: json
+    data: |-
+      {
+        "question": "How does Return to Title IV processing work in Banner Financial Aid?",
+        "top_k": 5,
+        "version_filter": "",
+        "year_filter": "",
+        "section_filter": "",
+        "source_type": "",
+        "mode": "auto"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

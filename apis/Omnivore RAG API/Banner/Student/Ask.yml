@@ -1,0 +1,25 @@
+info:
+  name: Ask
+  type: http
+  seq: 2
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/student/ask"
+  body:
+    type: json
+    data: |-
+      {
+        "question": "What is a CRN in Banner Student?",
+        "top_k": 5,
+        "version_filter": "",
+        "section_filter": "",
+        "mode": "local"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

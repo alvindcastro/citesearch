@@ -1,0 +1,23 @@
+info:
+  name: Ask (User Guide)
+  type: http
+  seq: 6
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/student/ask"
+  body:
+    type: json
+    data: |-
+      {
+        "question": "Where is the student name search form in Banner?",
+        "top_k": 5,
+        "source_type": "banner_user_guide"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

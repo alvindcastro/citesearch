@@ -1,0 +1,35 @@
+# Environment variables - never commit this
+.env
+
+# Compiled binary
+omnivore-rag
+*.exe
+
+# Go module cache
+vendor/
+
+# Input documents - store in Azure Blob instead
+data/docs/**/*.pdf
+data/docs/**/*.txt
+data/docs/**/*.md
+
+# GoLand IDE files
+.idea/
+*.iml
+
+# Claude Code - local settings are user-specific
+.claude/settings.local.json
+
+# Hugo build output
+blog/public/
+blog/resources/_gen/
+
+# Generated protobuf code (re-create with `buf generate`)
+gen/go/
+!gen/go/.gitkeep
+
+# Generated Swagger docs (re-create with `go generate ./internal/api/`)
+docs/
+
+# Claude Code memory (local to this machine)
+memory/

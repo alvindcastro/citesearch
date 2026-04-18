@@ -1,0 +1,27 @@
+info:
+  name: Ask
+  type: http
+  seq: 1
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/ar/ask"
+  body:
+    type: json
+    data: |-
+      {
+        "question": "How do I set up a payment plan for a student account in Banner AR?",
+        "top_k": 5,
+        "version_filter": "",
+        "year_filter": "",
+        "section_filter": "",
+        "source_type": "",
+        "mode": "auto"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
