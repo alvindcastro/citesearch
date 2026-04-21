@@ -512,3 +512,1676 @@ Keyword scoring: each match = word_count × 0.3. Multi-word phrases beat SopQuer
 - [ ] "How to restart the Banner server" → intent `SopQuery` (unchanged)
 - [ ] CLAUDE.md documents 6th intent and 3 new source values
 - [ ] Agent 10 documented in CLAUDE_AGENTS.md
+
+---
+
+## Phase F — Student Wizard: `POST /student/wizard` (TDD)
+
+**Goal:** Implement the shared wizard engine that powers all Banner Student guided workflows.
+Phase 1.1 (Create a Course) is the scope of this phase — it delivers the engine in full.
+The engine is generic: adding Phase 2–4 wizards requires only new step sequences, no engine changes.
+
+**Constraints:**
+- No external dependencies — stdlib + testify only
+- No LLM calls from Go code — all validation is deterministic
+- The citesearch escape hatch is a plain HTTP call through the existing `AdapterClient.AskBannerGuide`
+- `go test ./... -v` (no `-race`; CGO unavailable) must stay green at every task boundary
+
+**Package structure (new):**
+```
+internal/wizard/
+├── types.go    → WizardRequest, WizardResponse, WizardSession, WizardReview
+├── session.go  → SessionStore interface + MemorySessionStore
+├── registry.go → StepDefinition type + Registry
+├── validate.go → field validators: subject code, course number, credit hours, term code, etc.
+├── catalog.go  → CourseCreationSteps (Phase 1.1), DefaultRegistry()
+└── engine.go   → WizardEngine, ErrUnknownWizard, ErrSessionNotFound
+```
+
+**Handler wiring (existing files, minimal change):**
+```
+api/handlers.go → adds WizardRunner interface + /student/wizard route
+                  NewChatHandler gains a second parameter: WizardRunner
+cmd/server/main.go → constructs WizardEngine + wires into NewChatHandler
+```
+
+---
+
+### Tasks
+
+- [ ] **F.1 — Define wizard types in `internal/wizard/types.go`**
+
+  **Prompt for implementer:**
+  Create `internal/wizard/types.go` with these types. Do not add any logic — types only.
+
+  ```go
+  package wizard
+
+  // WizardRequest is the JSON body for POST /student/wizard.
+  // Exactly one of Value or Question should be non-empty on non-init turns.
+  type WizardRequest struct {
+      SessionID string `json:"session_id"` // required always
+      Wizard    string `json:"wizard"`     // required on init (Step == ""); ignored on subsequent turns
+      Step      string `json:"step"`       // current step being answered; empty = init
+      Value     string `json:"value"`      // user's field answer (mutually exclusive with Question)
+      Question  string `json:"question"`   // escape hatch: citesearch lookup instead of validation
+  }
+
+  // WizardResponse is returned by POST /student/wizard.
+  // On a normal step advance: Valid, NextStep, Prompt, Options, Session.
+  // On escape hatch: Answer, ResumeStep, Prompt, Session.
+  // On review: Review, Prompt, Session.
+  type WizardResponse struct {
+      Valid     *bool    `json:"valid,omitempty"`     // true=accepted, false=rejected; nil for lookup/init
+      NextStep  string   `json:"next_step,omitempty"` // next step name; "review" when all required done
+      Prompt    string   `json:"prompt"`              // always present: question or resume message
+      Options   []string `json:"options,omitempty"`   // non-nil = picklist field
+
+      Answer     string `json:"answer,omitempty"`      // escape hatch: citesearch answer text
+      ResumeStep string `json:"resume_step,omitempty"` // escape hatch: same value as req.Step
+
+      Review *WizardReview `json:"review,omitempty"` // populated when all required fields collected
+
+      Session WizardSession `json:"session"` // always present
+  }
+
+  // WizardReview is included when all required fields are collected, before final confirmation.
+  type WizardReview struct {
+      Fields  map[string]string `json:"fields"`
+      Message string            `json:"message"` // e.g. "Here's what I have. Does everything look correct?"
+  }
+
+  // WizardSession accumulates collected fields across turns.
+  type WizardSession struct {
+      SessionID   string            `json:"session_id"`
+      Wizard      string            `json:"wizard"`
+      CurrentStep string            `json:"current_step"` // "review" when awaiting confirmation
+      Fields      map[string]string `json:"fields"`
+      Complete    bool              `json:"complete"` // true after confirm
+  }
+  ```
+
+  TDD in `internal/wizard/types_test.go`:
+  1. **RED** — write JSON round-trip tests for both `WizardRequest` and `WizardResponse`:
+     ```go
+     func TestWizardRequest_JSONRoundTrip(t *testing.T) {
+         req := WizardRequest{SessionID: "s1", Wizard: "course_creation", Step: "subject_code", Value: "COMP"}
+         data, err := json.Marshal(req)
+         require.NoError(t, err)
+         var got WizardRequest
+         require.NoError(t, json.Unmarshal(data, &got))
+         assert.Equal(t, req, got)
+     }
+     func TestWizardResponse_OmitsNilFields(t *testing.T) {
+         // Valid=nil and Options=nil must not appear in JSON output
+         resp := WizardResponse{Prompt: "What is the subject code?", Session: WizardSession{SessionID: "s1", Fields: map[string]string{}}}
+         data, _ := json.Marshal(resp)
+         assert.NotContains(t, string(data), `"valid"`)
+         assert.NotContains(t, string(data), `"options"`)
+     }
+     ```
+  2. **GREEN** — the struct definitions above make these pass immediately.
+  3. **REFACTOR** — none at this stage.
+
+  Run: `go test ./internal/wizard/... -v`
+
+- [ ] **F.2 — `SessionStore` interface + `MemorySessionStore` in `internal/wizard/session.go`**
+
+  **Prompt for implementer:**
+  Create `internal/wizard/session.go`:
+
+  ```go
+  package wizard
+
+  import "sync"
+
+  // SessionStore manages wizard session state across turns.
+  type SessionStore interface {
+      Get(sessionID string) (WizardSession, bool)
+      Put(session WizardSession)
+      Delete(sessionID string)
+  }
+
+  // MemorySessionStore is a thread-safe in-memory SessionStore.
+  type MemorySessionStore struct {
+      mu       sync.RWMutex
+      sessions map[string]WizardSession
+  }
+
+  func NewMemorySessionStore() *MemorySessionStore {
+      return &MemorySessionStore{sessions: make(map[string]WizardSession)}
+  }
+  ```
+
+  Implement `Get` (RLock), `Put` (Lock), `Delete` (Lock).
+
+  TDD in `internal/wizard/session_test.go`:
+  1. **RED** — tests before implementation:
+     ```go
+     func TestMemorySessionStore_GetMiss(t *testing.T) {
+         store := NewMemorySessionStore()
+         _, ok := store.Get("s1")
+         assert.False(t, ok)
+     }
+     func TestMemorySessionStore_PutAndGet(t *testing.T) {
+         store := NewMemorySessionStore()
+         sess := WizardSession{SessionID: "s1", Wizard: "course_creation", CurrentStep: "subject_code", Fields: map[string]string{}}
+         store.Put(sess)
+         got, ok := store.Get("s1")
+         require.True(t, ok)
+         assert.Equal(t, sess, got)
+     }
+     func TestMemorySessionStore_Delete(t *testing.T) {
+         store := NewMemorySessionStore()
+         store.Put(WizardSession{SessionID: "s1", Fields: map[string]string{}})
+         store.Delete("s1")
+         _, ok := store.Get("s1")
+         assert.False(t, ok)
+     }
+     func TestMemorySessionStore_OverwritePut(t *testing.T) {
+         store := NewMemorySessionStore()
+         store.Put(WizardSession{SessionID: "s1", CurrentStep: "a", Fields: map[string]string{}})
+         store.Put(WizardSession{SessionID: "s1", CurrentStep: "b", Fields: map[string]string{}})
+         got, _ := store.Get("s1")
+         assert.Equal(t, "b", got.CurrentStep)
+     }
+     ```
+  2. **GREEN** — implement using `sync.RWMutex`.
+  3. **REFACTOR** — none.
+
+  Run: `go test ./internal/wizard/... -v`
+
+- [ ] **F.3 — `StepDefinition`, `Registry`, and `CourseCreationSteps` in `registry.go` + `catalog.go`**
+
+  **Prompt for implementer:**
+  Create `internal/wizard/registry.go`:
+
+  ```go
+  package wizard
+
+  // StepDefinition describes one field-collection step in a wizard.
+  type StepDefinition struct {
+      Name     string           // field key stored in WizardSession.Fields
+      Prompt   string           // question shown to the user
+      Required bool             // empty value is rejected when Required=true
+      Options  []string         // non-nil = picklist; value must be in this list
+      Validate func(string) error // nil = no additional validation beyond Required + Options
+  }
+
+  // Registry maps wizard names to their ordered step sequences.
+  type Registry struct {
+      wizards map[string][]StepDefinition
+  }
+
+  func NewRegistry() *Registry {
+      return &Registry{wizards: make(map[string][]StepDefinition)}
+  }
+
+  func (r *Registry) Register(name string, steps []StepDefinition) { r.wizards[name] = steps }
+  func (r *Registry) Steps(name string) ([]StepDefinition, bool) {
+      steps, ok := r.wizards[name]
+      return steps, ok
+  }
+  ```
+
+  Create `internal/wizard/catalog.go` with the Phase 1.1 Create a Course sequence (SCACRSE).
+  Required fields first; optional after. Field order matches Banner SCACRSE top-to-bottom.
+
+  ```go
+  package wizard
+
+  var CourseCreationSteps = []StepDefinition{
+      {Name: "subject_code",    Prompt: "What is the subject code? (e.g. COMP, MATH, ENGL)", Required: true, Validate: ValidateSubjectCode},
+      {Name: "course_number",   Prompt: "What is the course number? (e.g. 3850, 101H)",      Required: true, Validate: ValidateCourseNumber},
+      {Name: "short_title",     Prompt: "What is the short course title? (max 30 characters)", Required: true, Validate: ValidateShortTitle},
+      {Name: "long_title",      Prompt: "What is the full course title? (max 100 characters, or 'skip')", Required: false, Validate: ValidateLongTitle},
+      {Name: "credit_hours",    Prompt: "How many credit hours? (e.g. 3, 1.5)",              Required: true, Validate: ValidateCreditHours},
+      {Name: "course_level",    Prompt: "What is the course level?",                          Required: true, Options: []string{"UG", "GR", "CE"}},
+      {Name: "schedule_type",   Prompt: "What is the schedule type?",                         Required: true, Options: []string{"Lecture", "Lab", "Seminar", "Online", "Hybrid"}},
+      {Name: "grading_mode",    Prompt: "What is the grading mode?",                          Required: true, Options: []string{"Standard", "Pass-Fail", "Audit"}},
+      {Name: "college",         Prompt: "What is the college code? (e.g. AS, BU, ED)",        Required: true, Validate: ValidateCollegeCode},
+      {Name: "department",      Prompt: "What is the department code? (e.g. COMP, MATH)",     Required: true, Validate: ValidateDeptCode},
+      {Name: "prerequisites",   Prompt: "Any prerequisites? (describe or type 'none')",        Required: false},
+      {Name: "corequisites",    Prompt: "Any co-requisites? (describe or type 'none')",        Required: false},
+      {Name: "effective_term",  Prompt: "What is the effective term? (YYYYTT format, e.g. 202510 = Spring 2025)", Required: true, Validate: ValidateTermCode},
+      {Name: "status",          Prompt: "What is the initial course status?",                 Required: true, Options: []string{"Active", "Inactive", "Pending"}},
+  }
+
+  // DefaultRegistry returns a registry pre-loaded with Phase 1 catalog wizards.
+  func DefaultRegistry() *Registry {
+      r := NewRegistry()
+      r.Register("course_creation", CourseCreationSteps)
+      return r
+  }
+  ```
+
+  TDD in `internal/wizard/registry_test.go`:
+  1. **RED**:
+     ```go
+     func TestDefaultRegistry_CourseCreation_StepsInOrder(t *testing.T) {
+         r := DefaultRegistry()
+         steps, ok := r.Steps("course_creation")
+         require.True(t, ok)
+         assert.Equal(t, "subject_code", steps[0].Name, "first step must be subject_code")
+         assert.Equal(t, "status", steps[len(steps)-1].Name, "last step must be status")
+         assert.True(t, steps[0].Required)
+     }
+     func TestDefaultRegistry_CourseLevel_IsPicklist(t *testing.T) {
+         r := DefaultRegistry()
+         steps, _ := r.Steps("course_creation")
+         level := findStep(t, steps, "course_level")
+         assert.ElementsMatch(t, []string{"UG", "GR", "CE"}, level.Options)
+         assert.Nil(t, level.Validate)
+     }
+     func TestDefaultRegistry_UnknownWizard_ReturnsFalse(t *testing.T) {
+         r := DefaultRegistry()
+         _, ok := r.Steps("nonexistent_wizard")
+         assert.False(t, ok)
+     }
+     func findStep(t *testing.T, steps []StepDefinition, name string) StepDefinition {
+         t.Helper()
+         for _, s := range steps {
+             if s.Name == name { return s }
+         }
+         t.Fatalf("step %q not found in sequence", name)
+         return StepDefinition{}
+     }
+     ```
+  2. **GREEN** — the catalog/registry code above makes these pass.
+  3. **REFACTOR** — none.
+
+  Run: `go test ./internal/wizard/... -v`
+
+- [ ] **F.4 — Field validators in `internal/wizard/validate.go`**
+
+  **Prompt for implementer:**
+  Create `internal/wizard/validate.go`. Each validator is `func(string) error`.
+  Use only `regexp`, `strconv`, `strings`, `fmt` from stdlib.
+
+  | Validator | Rule |
+  |---|---|
+  | `ValidateSubjectCode` | 2–4 uppercase alpha characters only (A-Z) |
+  | `ValidateCourseNumber` | 1–6 alphanumeric characters (letters and digits allowed) |
+  | `ValidateShortTitle` | Non-empty, max 30 characters |
+  | `ValidateLongTitle` | Max 100 characters; "skip" or "" → valid (optional field) |
+  | `ValidateCreditHours` | Parseable float64, > 0, ≤ 12, at most 2 decimal places |
+  | `ValidateCollegeCode` | 2–6 uppercase alphanumeric characters |
+  | `ValidateDeptCode` | 2–6 uppercase alphanumeric characters |
+  | `ValidateTermCode` | Exactly 6 digits; first 4 = year 2000–2099; last 2 = 10, 20, or 30 |
+
+  TDD in `internal/wizard/validate_test.go`:
+  1. **RED** — table-driven tests for each validator:
+     ```go
+     func TestValidateSubjectCode(t *testing.T) {
+         cases := []struct{ in string; wantErr bool }{
+             {"COMP", false}, {"CS", false}, {"MATH", false},
+             {"", true},      // empty
+             {"C", true},     // too short
+             {"COMPS", true}, // too long
+             {"comp", true},  // lowercase
+             {"COM1", true},  // digit in subject code
+         }
+         for _, c := range cases {
+             err := ValidateSubjectCode(c.in)
+             if c.wantErr { assert.Error(t, err, c.in) } else { assert.NoError(t, err, c.in) }
+         }
+     }
+     func TestValidateCreditHours(t *testing.T) {
+         cases := []struct{ in string; wantErr bool }{
+             {"3", false}, {"1.5", false}, {"0.5", false}, {"12", false},
+             {"0", true},     // zero not allowed
+             {"0.0", true},   // zero
+             {"-1", true},    // negative
+             {"13", true},    // exceeds 12
+             {"1.123", true}, // more than 2 decimal places
+             {"abc", true},   // not a number
+         }
+         // ...
+     }
+     func TestValidateTermCode(t *testing.T) {
+         cases := []struct{ in string; wantErr bool }{
+             {"202510", false}, // Spring 2025
+             {"202520", false}, // Summer 2025
+             {"202530", false}, // Fall 2025
+             {"20251", true},   // 5 digits
+             {"2025100", true}, // 7 digits
+             {"202540", true},  // invalid term suffix (40 not allowed)
+             {"199910", true},  // year < 2000
+             {"210010", true},  // year > 2099
+             {"abcdef", true},  // non-numeric
+         }
+         // ...
+     }
+     // Also test ValidateShortTitle, ValidateLongTitle, ValidateCourseNumber,
+     // ValidateCollegeCode, ValidateDeptCode — at least 3 valid + 2 invalid cases each.
+     ```
+  2. **GREEN** — implement each validator. Extract shared `isUpperAlpha(s string) bool` and
+     `isUpperAlphanumeric(s string) bool` helpers; both are used by 2+ validators.
+  3. **REFACTOR** — check for duplicated regex patterns; consolidate if >1 validator shares the same underlying pattern.
+
+  Run: `go test ./internal/wizard/... -v`
+
+- [ ] **F.5 — `WizardEngine` in `internal/wizard/engine.go`**
+
+  **Prompt for implementer:**
+  Create `internal/wizard/engine.go`. The engine is the core: it processes one turn,
+  applies the right behavior based on what's in the request, and returns a `WizardResponse`.
+
+  ```go
+  package wizard
+
+  import (
+      "context"
+      "errors"
+      "fmt"
+  )
+
+  var (
+      ErrUnknownWizard   = errors.New("unknown wizard")
+      ErrSessionNotFound = errors.New("session not found")
+  )
+
+  // LookupFn is called when the user sends a Question instead of a Value.
+  // Returns the citesearch answer as plain text.
+  type LookupFn func(ctx context.Context, question string) (string, error)
+
+  // WizardEngine processes wizard turns: init, field submission, escape hatch, review.
+  type WizardEngine struct {
+      store    SessionStore
+      registry *Registry
+      lookup   LookupFn
+  }
+
+  func NewWizardEngine(store SessionStore, registry *Registry, lookup LookupFn) *WizardEngine {
+      return &WizardEngine{store: store, registry: registry, lookup: lookup}
+  }
+  ```
+
+  **`Handle` behavior — implement in this order:**
+
+  **Case 1 — Init** (`req.Step == "" && req.Value == "" && req.Question == ""`):
+  - Look up wizard in registry; if not found → return `ErrUnknownWizard`
+  - Create `WizardSession{SessionID: req.SessionID, Wizard: wizard, CurrentStep: steps[0].Name, Fields: map[string]string{}}`
+  - Store session
+  - Return `WizardResponse{NextStep: steps[0].Name, Prompt: steps[0].Prompt, Options: steps[0].Options, Session: session}`
+
+  **Case 2 — Escape hatch** (`req.Question != ""`):
+  - Load session from store; if not found → return `ErrSessionNotFound`
+  - Find current step prompt from registry (look up session.CurrentStep)
+  - Call `e.lookup(ctx, req.Question)`; if error → propagate
+  - Return `WizardResponse{Answer: answer, ResumeStep: req.Step, Prompt: "Got it — back to: " + currentStepPrompt, Session: session}`
+
+  **Case 3 — Review action** (`session.CurrentStep == "review"`):
+  - Load session; if not found → return `ErrSessionNotFound`
+  - `req.Value == "confirm"` → mark `session.Complete = true`, store, return review response with `Complete: true`
+  - `req.Value == "restart"` → delete session, return `WizardResponse{Prompt: "Session cleared. Send a new wizard to start over."}`
+  - `req.Value` starts with `"edit:"` → extract field name, find its step def, set `session.CurrentStep = fieldName`, store, return that step's prompt
+
+  **Case 4 — Field submission** (`req.Value != ""`):
+  - Load session; if not found → return `ErrSessionNotFound`
+  - Get wizard steps from registry (use session.Wizard, not req.Wizard)
+  - Find the step def matching `req.Step`
+  - Validate: if `step.Options != nil`, check `req.Value` is in the list; else if `step.Validate != nil`, call it
+  - If invalid → `valid := false; return WizardResponse{Valid: &valid, Prompt: errMsg + "\n\n" + step.Prompt, Options: step.Options, Session: session}`
+  - If valid → store `session.Fields[step.Name] = req.Value`
+  - Advance to next step: find index of current step + 1
+  - If no more steps: check all `Required` steps are collected
+    - Missing required fields → find first missing → set as next step, prompt it
+    - All required satisfied → set `session.CurrentStep = "review"`, build `WizardReview{Fields: session.Fields, Message: "Here's what I have. Does everything look correct?\nReply 'confirm', 'restart', or 'edit:<field_name>' to change a specific field."}`, return with `valid := true`
+  - If more steps exist → set `session.CurrentStep = nextStep.Name`, store, return `WizardResponse{Valid: &true, NextStep: nextStep.Name, Prompt: nextStep.Prompt, Options: nextStep.Options, Session: session}`
+
+  TDD in `internal/wizard/engine_test.go` — write ALL tests before implementing `Handle`:
+  ```go
+  func newTestEngine(t *testing.T) (*WizardEngine, *MemorySessionStore) {
+      t.Helper()
+      store := NewMemorySessionStore()
+      lookup := func(_ context.Context, q string) (string, error) {
+          return "lookup answer: " + q, nil
+      }
+      return NewWizardEngine(store, DefaultRegistry(), lookup), store
+  }
+
+  func TestEngine_Init_ReturnsFirstPrompt(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      resp, err := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Wizard: "course_creation"})
+      require.NoError(t, err)
+      assert.Equal(t, "subject_code", resp.NextStep)
+      assert.Contains(t, resp.Prompt, "subject code")
+      assert.Equal(t, "s1", resp.Session.SessionID)
+  }
+
+  func TestEngine_Init_UnknownWizard_ReturnsError(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      _, err := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Wizard: "does_not_exist"})
+      assert.ErrorIs(t, err, ErrUnknownWizard)
+  }
+
+  func TestEngine_SubmitValidValue_AdvancesToNextStep(t *testing.T) {
+      engine, store := newTestEngine(t)
+      engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Wizard: "course_creation"})
+      trueVal := true
+      resp, err := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Step: "subject_code", Value: "COMP"})
+      require.NoError(t, err)
+      assert.Equal(t, &trueVal, resp.Valid)
+      assert.Equal(t, "course_number", resp.NextStep)
+      sess, _ := store.Get("s1")
+      assert.Equal(t, "COMP", sess.Fields["subject_code"])
+  }
+
+  func TestEngine_SubmitInvalidValue_RepromptsSameStep(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Wizard: "course_creation"})
+      falseVal := false
+      resp, err := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Step: "subject_code", Value: "comp"})
+      require.NoError(t, err)
+      assert.Equal(t, &falseVal, resp.Valid)
+      assert.Contains(t, resp.Prompt, "subject code")
+  }
+
+  func TestEngine_InvalidPicklistValue_RepromptWithOptions(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Wizard: "course_creation"})
+      advanceTo(t, engine, "s1", "course_level")
+      resp, _ := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Step: "course_level", Value: "GRADUATE"})
+      falseVal := false
+      assert.Equal(t, &falseVal, resp.Valid)
+      assert.ElementsMatch(t, []string{"UG", "GR", "CE"}, resp.Options)
+  }
+
+  func TestEngine_EscapeHatch_ReturnsAnswerAndResumesStep(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Wizard: "course_creation"})
+      resp, err := engine.Handle(context.Background(), WizardRequest{
+          SessionID: "s1", Step: "subject_code", Question: "What format should the subject code be?",
+      })
+      require.NoError(t, err)
+      assert.Contains(t, resp.Answer, "lookup answer")
+      assert.Equal(t, "subject_code", resp.ResumeStep)
+      assert.Contains(t, resp.Prompt, "subject code")
+  }
+
+  func TestEngine_AllRequiredFields_TransitionsToReview(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      resp := driveToReview(t, engine, "s1")
+      assert.NotNil(t, resp.Review)
+      assert.Equal(t, "review", resp.Session.CurrentStep)
+      assert.Equal(t, "COMP", resp.Review.Fields["subject_code"])
+  }
+
+  func TestEngine_ReviewConfirm_SetsComplete(t *testing.T) {
+      engine, store := newTestEngine(t)
+      driveToReview(t, engine, "s1")
+      _, err := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Step: "review", Value: "confirm"})
+      require.NoError(t, err)
+      sess, _ := store.Get("s1")
+      assert.True(t, sess.Complete)
+  }
+
+  func TestEngine_ReviewRestart_ClearsSession(t *testing.T) {
+      engine, store := newTestEngine(t)
+      driveToReview(t, engine, "s1")
+      _, err := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Step: "review", Value: "restart"})
+      require.NoError(t, err)
+      _, ok := store.Get("s1")
+      assert.False(t, ok, "session must be deleted on restart")
+  }
+
+  func TestEngine_ReviewEdit_JumpsToField(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      driveToReview(t, engine, "s1")
+      resp, err := engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Step: "review", Value: "edit:subject_code"})
+      require.NoError(t, err)
+      assert.Contains(t, resp.Prompt, "subject code")
+      assert.Equal(t, "subject_code", resp.Session.CurrentStep)
+  }
+
+  func TestEngine_SessionNotFound_ReturnsError(t *testing.T) {
+      engine, _ := newTestEngine(t)
+      _, err := engine.Handle(context.Background(), WizardRequest{SessionID: "ghost", Step: "subject_code", Value: "COMP"})
+      assert.ErrorIs(t, err, ErrSessionNotFound)
+  }
+
+  // advanceTo submits valid synthetic values for all steps up to (but not including) targetStep.
+  func advanceTo(t *testing.T, engine *WizardEngine, sessionID, targetStep string) {
+      t.Helper()
+      validValues := map[string]string{
+          "subject_code": "COMP", "course_number": "3850", "short_title": "Software Eng",
+          "long_title": "skip", "credit_hours": "3", "course_level": "UG",
+          "schedule_type": "Lecture", "grading_mode": "Standard",
+          "college": "AS", "department": "COMP",
+          "prerequisites": "none", "corequisites": "none",
+          "effective_term": "202510", "status": "Active",
+      }
+      steps, _ := DefaultRegistry().Steps("course_creation")
+      for _, step := range steps {
+          if step.Name == targetStep { return }
+          engine.Handle(context.Background(), WizardRequest{SessionID: sessionID, Step: step.Name, Value: validValues[step.Name]})
+      }
+  }
+
+  // driveToReview drives all steps with valid synthetic values and returns the review response.
+  func driveToReview(t *testing.T, engine *WizardEngine, sessionID string) WizardResponse {
+      t.Helper()
+      engine.Handle(context.Background(), WizardRequest{SessionID: sessionID, Wizard: "course_creation"})
+      validValues := map[string]string{
+          "subject_code": "COMP", "course_number": "3850", "short_title": "Software Eng",
+          "long_title": "skip", "credit_hours": "3", "course_level": "UG",
+          "schedule_type": "Lecture", "grading_mode": "Standard",
+          "college": "AS", "department": "COMP",
+          "prerequisites": "none", "corequisites": "none",
+          "effective_term": "202510", "status": "Active",
+      }
+      steps, _ := DefaultRegistry().Steps("course_creation")
+      var last WizardResponse
+      for _, step := range steps {
+          resp, err := engine.Handle(context.Background(), WizardRequest{SessionID: sessionID, Step: step.Name, Value: validValues[step.Name]})
+          require.NoError(t, err)
+          last = resp
+      }
+      return last
+  }
+  ```
+
+  Run: `go test ./internal/wizard/... -v`
+
+- [ ] **F.6 — `WizardRunner` interface + `/student/wizard` handler in `api/handlers.go`**
+
+  **Prompt for implementer:**
+  `api/handlers.go` already defines `AdapterClient` as an interface so tests can mock it.
+  Apply the same pattern for the wizard engine.
+
+  **Step 1 — Add `WizardRunner` interface and update `NewChatHandler`:**
+  ```go
+  // WizardRunner is the interface the /student/wizard handler depends on.
+  // The concrete *wizard.WizardEngine satisfies this interface.
+  type WizardRunner interface {
+      Handle(ctx context.Context, req wizardpkg.WizardRequest) (wizardpkg.WizardResponse, error)
+  }
+  ```
+  Import `citesearch/internal/wizard` as `wizardpkg` to avoid collision with the local `wizard` identifier.
+
+  Update `NewChatHandler` signature:
+  ```go
+  func NewChatHandler(client AdapterClient, runner WizardRunner) *ChatHandler {
+      h := &ChatHandler{mux: http.NewServeMux()}
+      h.mux.HandleFunc("/chat/ask", askHandler(client))
+      h.mux.HandleFunc("/chat/sentiment", sentimentHandler(sentiment.NewAnalyzer(sentiment.DefaultConfig())))
+      h.mux.HandleFunc("/chat/intent", intentHandler(intent.NewClassifier(intent.DefaultIntentConfig())))
+      h.mux.HandleFunc("/student/wizard", wizardHandler(runner))
+      h.mux.HandleFunc("/health", healthHandler)
+      return h
+  }
+  ```
+
+  **Step 2 — Implement `wizardHandler`:**
+  ```go
+  func wizardHandler(runner WizardRunner) http.HandlerFunc {
+      return func(w http.ResponseWriter, r *http.Request) {
+          if r.Method != http.MethodPost {
+              writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
+              return
+          }
+          var req wizardpkg.WizardRequest
+          if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+              writeJSONError(w, http.StatusBadRequest, "invalid JSON")
+              return
+          }
+          if req.SessionID == "" {
+              writeJSONError(w, http.StatusBadRequest, "session_id is required")
+              return
+          }
+          resp, err := runner.Handle(r.Context(), req)
+          if err != nil {
+              switch {
+              case errors.Is(err, wizardpkg.ErrUnknownWizard):
+                  writeJSONError(w, http.StatusBadRequest, "unknown wizard")
+              case errors.Is(err, wizardpkg.ErrSessionNotFound):
+                  writeJSONError(w, http.StatusNotFound, "session not found")
+              default:
+                  writeJSONError(w, http.StatusInternalServerError, "internal server error")
+              }
+              return
+          }
+          w.Header().Set("Content-Type", "application/json")
+          json.NewEncoder(w).Encode(resp)
+      }
+  }
+  ```
+
+  **Step 3 — Update `handlers_test.go`:**
+  All existing calls `NewChatHandler(mockClient)` must become `NewChatHandler(mockClient, noopRunner())`.
+  Add a no-op runner at the top of the test file:
+  ```go
+  type noopWizardRunner struct{}
+  func (n *noopWizardRunner) Handle(_ context.Context, _ wizardpkg.WizardRequest) (wizardpkg.WizardResponse, error) {
+      return wizardpkg.WizardResponse{}, nil
+  }
+  func noopRunner() WizardRunner { return &noopWizardRunner{} }
+  ```
+
+  TDD in `api/handlers_test.go`:
+  1. **RED** — add wizard handler tests before implementing:
+     ```go
+     func TestWizardHandler_MethodNotAllowed(t *testing.T) {
+         h := NewChatHandler(&mockAdapterClient{}, noopRunner())
+         req := httptest.NewRequest(http.MethodGet, "/student/wizard", nil)
+         w := httptest.NewRecorder()
+         h.ServeHTTP(w, req)
+         assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
+     }
+     func TestWizardHandler_MissingSessionID_Returns400(t *testing.T) {
+         h := NewChatHandler(&mockAdapterClient{}, noopRunner())
+         body := `{"wizard":"course_creation"}`
+         req := httptest.NewRequest(http.MethodPost, "/student/wizard", strings.NewReader(body))
+         req.Header.Set("Content-Type", "application/json")
+         w := httptest.NewRecorder()
+         h.ServeHTTP(w, req)
+         assert.Equal(t, http.StatusBadRequest, w.Code)
+     }
+     func TestWizardHandler_UnknownWizard_Returns400(t *testing.T) {
+         mockRunner := &mockWizardRunner{handleFn: func(_ context.Context, _ wizardpkg.WizardRequest) (wizardpkg.WizardResponse, error) {
+             return wizardpkg.WizardResponse{}, wizardpkg.ErrUnknownWizard
+         }}
+         h := NewChatHandler(&mockAdapterClient{}, mockRunner)
+         body := `{"session_id":"s1","wizard":"bad_wizard"}`
+         req := httptest.NewRequest(http.MethodPost, "/student/wizard", strings.NewReader(body))
+         req.Header.Set("Content-Type", "application/json")
+         w := httptest.NewRecorder()
+         h.ServeHTTP(w, req)
+         assert.Equal(t, http.StatusBadRequest, w.Code)
+     }
+     func TestWizardHandler_SessionNotFound_Returns404(t *testing.T) {
+         // mockRunner returns ErrSessionNotFound → expect 404
+     }
+     func TestWizardHandler_Init_ReturnsFirstPrompt(t *testing.T) {
+         // Use real WizardEngine with DefaultRegistry and noopLookup
+         store := wizardpkg.NewMemorySessionStore()
+         lookup := func(_ context.Context, q string) (string, error) { return "ok", nil }
+         engine := wizardpkg.NewWizardEngine(store, wizardpkg.DefaultRegistry(), lookup)
+         h := NewChatHandler(&mockAdapterClient{}, engine)
+         body := `{"session_id":"s1","wizard":"course_creation"}`
+         req := httptest.NewRequest(http.MethodPost, "/student/wizard", strings.NewReader(body))
+         req.Header.Set("Content-Type", "application/json")
+         w := httptest.NewRecorder()
+         h.ServeHTTP(w, req)
+         assert.Equal(t, http.StatusOK, w.Code)
+         var resp wizardpkg.WizardResponse
+         json.Unmarshal(w.Body.Bytes(), &resp)
+         assert.Equal(t, "subject_code", resp.NextStep)
+     }
+     ```
+  Also add `mockWizardRunner` struct to `handlers_test.go` (mirrors `mockAdapterClient` pattern):
+  ```go
+  type mockWizardRunner struct {
+      handleFn func(ctx context.Context, req wizardpkg.WizardRequest) (wizardpkg.WizardResponse, error)
+  }
+  func (m *mockWizardRunner) Handle(ctx context.Context, req wizardpkg.WizardRequest) (wizardpkg.WizardResponse, error) {
+      if m.handleFn != nil { return m.handleFn(ctx, req) }
+      return wizardpkg.WizardResponse{}, nil
+  }
+  ```
+  2. **GREEN** — implement `wizardHandler`, update `NewChatHandler`, fix all call sites.
+  3. **REFACTOR** — check that all pre-existing `/chat/*` tests remain green with the `noopRunner()` change.
+
+  Run: `go test ./... -v`
+
+- [ ] **F.7 — Wire WizardEngine in `cmd/server/main.go`**
+
+  **Prompt for implementer:**
+  In `cmd/server/main.go` (or wherever `NewChatHandler` is called in production wiring),
+  construct the wizard engine and pass it to the handler.
+
+  ```go
+  // After creating AdapterClient ac:
+  lookupFn := func(ctx context.Context, q string) (string, error) {
+      resp, err := ac.AskBannerGuide(ctx, q, "student")
+      if err != nil { return "", err }
+      return resp.Answer, nil
+  }
+  engine := wizard.NewWizardEngine(wizard.NewMemorySessionStore(), wizard.DefaultRegistry(), lookupFn)
+  handler := api.NewChatHandler(ac, engine)
+  ```
+
+  TDD: No new tests needed — the handler tests in F.6 cover this. Manually verify that
+  `go build ./...` succeeds after wiring (catch any import cycle or missing interface method).
+
+  Run: `go build ./...` then `go test ./... -v`
+
+- [ ] **F.8 — Update `CLAUDE.md` with `/student/wizard` documentation**
+
+  **Prompt for implementer:**
+  In `CLAUDE.md`, under "Backend API":
+  ```
+  POST /student/wizard  { session_id (required), wizard?, step?, value?, question? }
+  Returns wizard.WizardResponse: { valid?, next_step?, prompt, options?, answer?, resume_step?, review?, session }
+  Init: send session_id + wizard (step/value/question all empty) → receives first prompt
+  Submit: send step + value → validated and advanced; or step + question → escape hatch lookup
+  Review: next_step="review"; send value="confirm"|"restart"|"edit:<field>" to resolve
+  Escape hatch: sends question to AskBannerGuide(student) → returns answer + resume_step
+  ```
+
+  Under "This repo":
+  ```
+  internal/wizard    → wizard engine: MemorySessionStore, Registry, StepDefinition, WizardEngine
+  ```
+
+  Under "Non-negotiable rules":
+  ```
+  wizardHandler maps ErrUnknownWizard → 400, ErrSessionNotFound → 404; never leaks engine details
+  NewChatHandler(client AdapterClient, runner WizardRunner) — both parameters required
+  ```
+
+---
+
+### Phase F Acceptance Criteria
+
+- [ ] `go test ./... -v` passes with 0 failures
+- [ ] `POST /student/wizard {session_id:"s1", wizard:"course_creation"}` → 200, `next_step:"subject_code"`
+- [ ] `POST /student/wizard {session_id:"s1", step:"subject_code", value:"comp"}` → 200, `valid:false`, reprompt visible
+- [ ] `POST /student/wizard {session_id:"s1", step:"subject_code", value:"COMP"}` → 200, `valid:true`, `next_step:"course_number"`
+- [ ] `POST /student/wizard {session_id:"s1", step:"subject_code", question:"What format?"}` → 200, `answer` non-empty, `resume_step:"subject_code"`
+- [ ] `POST /student/wizard {session_id:"s1", wizard:"nonexistent"}` → 400
+- [ ] `POST /student/wizard {session_id:"ghost", step:"subject_code", value:"COMP"}` → 404
+- [ ] All field validators tested: ≥3 valid inputs + ≥2 invalid inputs per validator
+- [ ] `driveToReview` helper drives all 14 CourseCreation steps and arrives at review node
+- [ ] `go build ./...` succeeds (no import cycles)
+- [ ] CLAUDE.md documents the `/student/wizard` endpoint
+
+---
+
+## Phase G — Agents 11 & 12: Wizard Conductor and Test Harness
+
+**Goal:** Document two new Claude agents for the Banner Student wizard system in `wiki/CLAUDE_AGENTS.md`.
+No Go code changes. These agents operate against the `/student/wizard` adapter endpoint built in Phase F.
+
+### Tasks
+
+- [ ] **G.1 — Document Agent 11 (Banner Student Wizard Conductor) in `wiki/CLAUDE_AGENTS.md`**
+
+  **Prompt for implementer:**
+  Append Agent 11 to `wiki/CLAUDE_AGENTS.md` before the Tool Reference section.
+  Agent 11 is the Botpress-facing wizard conductor: it receives a user message, identifies
+  which wizard to launch (or continues the active session), and calls `POST /student/wizard`
+  once per turn to drive the field-collection conversation.
+
+  Agent 11 must document all of the following:
+
+  **Tool:** `wizard_step` wrapping `POST /student/wizard`
+  - Inputs: `session_id`, `wizard` (init only), `step`, `value`, `question`
+  - Output: `WizardResponse` — the agent reads `next_step`, `prompt`, `options`, `answer`, `review`
+
+  **Wizard trigger phrases** (these launch a specific wizard):
+  | Phrase | Wizard |
+  |---|---|
+  | "create a course", "new course", "add a course", "SCACRSE" | `course_creation` |
+  | (Phase 2–4 wizards added here as they are built) | |
+
+  **System prompt must cover:**
+  - On first user message: detect wizard intent from trigger phrase → init session → present first prompt
+  - On subsequent messages: detect question vs field answer, populate either `question` or `value`
+  - Question detection (client-side, before calling wizard_step):
+    - Ends with `?` → use `question` field
+    - Starts with "what", "how", "why", "when", "where", "can", "is", "are" → use `question` field
+    - Otherwise → use `value` field
+  - For picklist fields (response includes `options`): present as Quick Reply buttons in Botpress
+  - For review node (`next_step == "review"`): show the review summary; accept "confirm", "restart", or "edit <field>"
+  - If response is 404 (session not found): tell the user their session expired and offer to restart
+  - Never answer Banner questions from prior training knowledge — always route through `wizard_step`
+
+  **Session management:**
+  - Generate `session_id = uuid()` once at conversation start
+  - Reuse same `session_id` for every turn in the conversation
+
+  **Implementation:** Python using Anthropic SDK tool-use loop, model `claude-haiku-4-5`.
+
+  **Example session:** Show a full course_creation wizard from "I want to create a course"
+  through subject code, course number, one escape hatch question, picklist selection,
+  review display, and final confirmation.
+
+- [ ] **G.2 — Document Agent 12 (Wizard Test Harness Agent) in `wiki/CLAUDE_AGENTS.md`**
+
+  **Prompt for implementer:**
+  Append Agent 12 to `wiki/CLAUDE_AGENTS.md` after Agent 11, before the Tool Reference section.
+  Agent 12 is a developer-facing QA agent: no human in the loop. Given a wizard name, it
+  drives the full golden path with valid synthetic inputs, then retests each step with a
+  deliberate invalid input to confirm all validation rules fire correctly.
+
+  Agent 12 must document all of the following:
+
+  **Tool:** `wizard_step` (same tool as Agent 11, shared `run_tool` dispatcher)
+
+  **System prompt must specify:**
+  - Accept a wizard name and the step sequence as context
+  - Golden path pass: submit a known-valid value for each step in sequence; assert `valid:true` each time
+  - Error path pass: for each step that has a `Validate` function or `Options` list, submit one
+    known-invalid value; assert `valid:false` and an error message in `prompt`
+  - Skip optional steps (Required=false) in error path — they don't have hard validation
+  - Output a Markdown table after each pass:
+    ```
+    | Step | Input | Expected | valid | prompt_contains | PASS/FAIL |
+    |------|-------|----------|-------|-----------------|-----------|
+    ```
+  - Final summary: total steps tested, pass count, fail count, any unexpected valid:true on invalid input (critical failure)
+
+  **Known test values** (embed in system prompt context for `course_creation`):
+  | Step | Valid input | Invalid input | Why invalid |
+  |---|---|---|---|
+  | subject_code | COMP | comp | lowercase |
+  | course_number | 3850 | (empty) | empty not allowed |
+  | short_title | Software Engineering | (31+ chars) | exceeds max length |
+  | credit_hours | 3 | 0 | zero not allowed |
+  | course_level | UG | GRADUATE | not in options list |
+  | effective_term | 202510 | 202540 | invalid term suffix |
+  | (etc. for all steps) | | | |
+
+  **Implementation:** Python using Anthropic SDK. Model `claude-haiku-4-5`. Not interactive —
+  runs to completion and returns the full test report as a string.
+
+  **Example output:** Show the Markdown table for course_creation with golden path + error path
+  results, followed by a summary line like "14/14 golden path PASS, 8/8 error path PASS".
+
+  **Use case note:** Run this agent as a pre-merge check whenever a new wizard step sequence
+  is added to `internal/wizard/catalog.go`.
+
+- [ ] **G.3 — Update TOC and tables in `wiki/CLAUDE_AGENTS.md`**
+
+  **Prompt for implementer:**
+  1. Add to Table of Contents (after item 11 — Agent 10):
+     ```
+     12. [Agent 11: Banner Student Wizard Conductor](#agent-11-banner-student-wizard-conductor)
+     13. [Agent 12: Wizard Test Harness Agent](#agent-12-wizard-test-harness-agent)
+     ```
+  2. Add to Tool Reference table:
+     ```
+     | `wizard_step` | POST | `/student/wizard` | 11, 12 |
+     ```
+  3. Add to Cost Control table (under Implementation Notes):
+     ```
+     | Banner Student Wizard Conductor (Agent 11) | `claude-haiku-4-5` | < $0.002 per turn |
+     | Wizard Test Harness (Agent 12) | `claude-haiku-4-5` | < $0.01 per wizard run |
+     ```
+  4. Add to Priority Recommendation section:
+     ```
+     **Wizard system (after Phase F is deployed):**
+     - **Agent 11 — Wizard Conductor**: The Botpress integration point for all wizard sessions
+     - **Agent 12 — Test Harness**: Run before deploying any new wizard step sequence
+     ```
+  5. Update the existing `agents/` project structure in Implementation Notes to include:
+     ```
+     ├── wizard_conductor.py  # Agent 11
+     ├── wizard_harness.py    # Agent 12
+     ```
+
+---
+
+### Phase G Acceptance Criteria
+
+- [ ] Agent 11 fully documented: tool schema, system prompt, Python implementation, full example session
+- [ ] Agent 12 fully documented: tool schema, system prompt with test values table, example report output
+- [ ] TOC updated to 13 items
+- [ ] Tool Reference table includes `wizard_step`
+- [ ] Cost Control table includes Agents 11 and 12
+- [ ] Priority section references wizard agents
+- [ ] `agents/` project structure in Implementation Notes updated
+
+---
+
+## Phase H — AI Query Rewriting (TDD)
+
+**Goal:** Port Phase 5A query rewriting from the Java AI-ROADMAP to Go. Before routing user
+questions to citesearch, use an LLM to expand ambiguous queries with Banner-specific synonyms
+and expanded acronyms. Improves retrieval for terse questions ("GL changes", "9.3.37 notes").
+Also applied to the wizard escape hatch so mid-step clarifying questions retrieve better answers.
+
+**Disabled by default** — set `ENABLE_QUERY_REWRITE=true` to activate. Falls back silently
+to the original question on any error or when disabled.
+
+**Package structure (new):**
+```
+internal/rewrite/
+├── rewriter.go      → Rewriter interface + NoopRewriter + LLMRewriter + MockRewriter
+└── rewriter_test.go
+```
+
+**Handler change:** `NewChatHandler` gains a third parameter: `rewriter rewritepkg.Rewriter`.
+
+**Wizard change:** `LookupFn` gains a `step string` parameter so the rewriter can use the
+current wizard step as context when expanding escape hatch questions.
+
+---
+
+### Tasks
+
+- [ ] **H.1 — Define `Rewriter` interface and `NoopRewriter` in `internal/rewrite/rewriter.go`**
+
+  **Prompt for implementer:**
+  Create `internal/rewrite/rewriter.go` with types and the no-op implementation only.
+  Do not add LLM logic yet.
+
+  ```go
+  package rewrite
+
+  import "context"
+
+  type RewriteRequest struct {
+      Question string
+      Intent   string // e.g. BannerRelease, SopQuery — informs vocabulary
+      Context  string // optional: wizard step name for escape hatch queries
+  }
+
+  type RewriteResult struct {
+      Original  string
+      Rewritten string
+      Changed   bool
+  }
+
+  type Rewriter interface {
+      Rewrite(ctx context.Context, req RewriteRequest) (RewriteResult, error)
+  }
+
+  type NoopRewriter struct{}
+
+  func (n *NoopRewriter) Rewrite(_ context.Context, req RewriteRequest) (RewriteResult, error) {
+      return RewriteResult{Original: req.Question, Rewritten: req.Question, Changed: false}, nil
+  }
+
+  // MockRewriter is exported for use in other packages' tests.
+  type MockRewriter struct {
+      RewriteFn func(context.Context, RewriteRequest) (RewriteResult, error)
+  }
+  func (m *MockRewriter) Rewrite(ctx context.Context, req RewriteRequest) (RewriteResult, error) {
+      if m.RewriteFn != nil { return m.RewriteFn(ctx, req) }
+      return RewriteResult{Original: req.Question, Rewritten: req.Question}, nil
+  }
+  ```
+
+  TDD in `internal/rewrite/rewriter_test.go`:
+  1. **RED**:
+     ```go
+     func TestNoopRewriter_ReturnsOriginalUnchanged(t *testing.T) {
+         r := &NoopRewriter{}
+         result, err := r.Rewrite(context.Background(), RewriteRequest{Question: "What changed?", Intent: "BannerRelease"})
+         require.NoError(t, err)
+         assert.Equal(t, "What changed?", result.Rewritten)
+         assert.False(t, result.Changed)
+     }
+     func TestMockRewriter_CallsRewriteFn(t *testing.T) {
+         r := &MockRewriter{RewriteFn: func(_ context.Context, req RewriteRequest) (RewriteResult, error) {
+             return RewriteResult{Original: req.Question, Rewritten: "expanded: " + req.Question, Changed: true}, nil
+         }}
+         result, err := r.Rewrite(context.Background(), RewriteRequest{Question: "GL changes"})
+         require.NoError(t, err)
+         assert.True(t, result.Changed)
+     }
+     ```
+  2. **GREEN** — types above make these pass immediately.
+  3. **REFACTOR** — none.
+
+  Run: `go test ./internal/rewrite/... -v`
+
+- [ ] **H.2 — Implement `LLMRewriter` with httptest-driven TDD**
+
+  **Prompt for implementer:**
+  Add `LLMRewriter` to `internal/rewrite/rewriter.go`. Uses raw `net/http` with Anthropic
+  Messages API format (same pattern as `internal/adapter/client.go`).
+
+  ```go
+  type LLMRewriter struct {
+      endpoint string
+      apiKey   string
+      model    string
+      client   *http.Client
+  }
+
+  // NewLLMRewriter reads env vars. Returns *NoopRewriter when ENABLE_QUERY_REWRITE != "true".
+  func NewLLMRewriter() Rewriter {
+      if os.Getenv("ENABLE_QUERY_REWRITE") != "true" {
+          return &NoopRewriter{}
+      }
+      return &LLMRewriter{
+          endpoint: firstNonEmpty(os.Getenv("REWRITE_ENDPOINT"), "https://api.anthropic.com/v1/messages"),
+          apiKey:   os.Getenv("REWRITE_API_KEY"),
+          model:    firstNonEmpty(os.Getenv("REWRITE_MODEL"), "claude-haiku-4-5-20251001"),
+          client:   &http.Client{Timeout: 5 * time.Second},
+      }
+  }
+
+  func firstNonEmpty(a, b string) string { if a != "" { return a }; return b }
+  ```
+
+  **System prompt for the LLM:**
+  ```
+  You are a query expansion assistant for an Ellucian Banner ERP knowledge base.
+  Given a user question and its intent, rewrite it to be more specific and retrievable.
+  - Expand acronyms: GL→General Ledger, AR→Accounts Receivable, AP→Accounts Payable
+  - Add Banner ERP context if the query is too terse
+  - Keep the rewrite under 2 sentences
+  - If the question is already clear, return it unchanged
+  - Respond with ONLY the rewritten question. No explanation.
+  ```
+
+  **On any error** (HTTP, parse, timeout): return original question, `Changed: false`, `err: nil`.
+
+  TDD (add to `internal/rewrite/rewriter_test.go`):
+  ```go
+  func TestLLMRewriter_ExpandsQuestion(t *testing.T) {
+      srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+          json.NewEncoder(w).Encode(map[string]any{
+              "content": []map[string]any{{"type":"text","text":"What changed in the Banner Finance General Ledger module?"}},
+          })
+      }))
+      defer srv.Close()
+      r := &LLMRewriter{endpoint: srv.URL, apiKey: "test", model: "test", client: &http.Client{}}
+      result, err := r.Rewrite(context.Background(), RewriteRequest{Question: "GL changes", Intent: "BannerFinance"})
+      require.NoError(t, err)
+      assert.True(t, result.Changed)
+      assert.Contains(t, result.Rewritten, "General Ledger")
+      assert.Equal(t, "GL changes", result.Original)
+  }
+  func TestLLMRewriter_FallsBackSilentlyOnHTTPError(t *testing.T) {
+      srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+          w.WriteHeader(http.StatusInternalServerError)
+      }))
+      defer srv.Close()
+      r := &LLMRewriter{endpoint: srv.URL, apiKey: "test", model: "test", client: &http.Client{}}
+      result, err := r.Rewrite(context.Background(), RewriteRequest{Question: "What changed?"})
+      require.NoError(t, err, "LLMRewriter must not propagate errors")
+      assert.Equal(t, "What changed?", result.Rewritten)
+      assert.False(t, result.Changed)
+  }
+  func TestLLMRewriter_SameTextIsNotChanged(t *testing.T) {
+      srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+          json.NewEncoder(w).Encode(map[string]any{
+              "content": []map[string]any{{"type":"text","text":"What changed?"}},
+          })
+      }))
+      defer srv.Close()
+      r := &LLMRewriter{endpoint: srv.URL, apiKey: "test", model: "test", client: &http.Client{}}
+      result, _ := r.Rewrite(context.Background(), RewriteRequest{Question: "What changed?"})
+      assert.False(t, result.Changed)
+  }
+  func TestNewLLMRewriter_ReturnsNoopWhenDisabled(t *testing.T) {
+      t.Setenv("ENABLE_QUERY_REWRITE", "")
+      r := NewLLMRewriter()
+      _, ok := r.(*NoopRewriter)
+      assert.True(t, ok)
+  }
+  ```
+
+  Run: `go test ./internal/rewrite/... -v`
+
+- [ ] **H.3 — Wire `Rewriter` into `/chat/ask` handler**
+
+  **Prompt for implementer:**
+  In `api/handlers.go`:
+  1. Import `citesearch/internal/rewrite` as `rewritepkg`.
+  2. Add `rewriter rewritepkg.Rewriter` field to `ChatHandler`.
+  3. Update `NewChatHandler` to 3 parameters: `(client AdapterClient, runner WizardRunner, rewriter rewritepkg.Rewriter)`.
+  4. In `askHandler`, after detecting intent but before backend routing:
+     ```go
+     rewriteResult, _ := rewriter.Rewrite(r.Context(), rewritepkg.RewriteRequest{
+         Question: req.Message,
+         Intent:   string(detectedIntent),
+     })
+     effectiveQuestion := rewriteResult.Rewritten
+     ```
+     Replace all uses of `req.Message` in backend routing calls with `effectiveQuestion`.
+  5. Update all `NewChatHandler(mockClient, noopRunner())` call sites in tests to:
+     `NewChatHandler(mockClient, noopRunner(), &rewritepkg.NoopRewriter{})`.
+
+  Add test:
+  ```go
+  func TestChatAsk_RewriterReceivesIntentAndQuestion(t *testing.T) {
+      var capturedReq rewritepkg.RewriteRequest
+      mockRewriter := &rewritepkg.MockRewriter{
+          RewriteFn: func(_ context.Context, req rewritepkg.RewriteRequest) (rewritepkg.RewriteResult, error) {
+              capturedReq = req
+              return rewritepkg.RewriteResult{Original: req.Question, Rewritten: "expanded: " + req.Question, Changed: true}, nil
+          },
+      }
+      mockClient := &mockAdapterClient{
+          bannerAskFn: func(_ context.Context, q string, _ adapter.AskOptions) (adapter.AdapterResponse, error) {
+              assert.Contains(t, q, "expanded:")
+              return adapter.AdapterResponse{Answer: "ok", RetrievalCount: 1, Sources: []adapter.Source{{Score: 0.033}}}, nil
+          },
+      }
+      h := NewChatHandler(mockClient, noopRunner(), mockRewriter)
+      body := `{"message":"GL changes","source":"banner"}`
+      req := httptest.NewRequest(http.MethodPost, "/chat/ask", strings.NewReader(body))
+      req.Header.Set("Content-Type", "application/json")
+      w := httptest.NewRecorder()
+      h.ServeHTTP(w, req)
+      assert.Equal(t, http.StatusOK, w.Code)
+      assert.Equal(t, "GL changes", capturedReq.Question)
+  }
+  ```
+
+  Run: `go test ./... -v`
+
+- [ ] **H.4 — Update wizard `LookupFn` to pass step name**
+
+  **Prompt for implementer:**
+  In `internal/wizard/engine.go`, update `LookupFn`:
+  ```go
+  // LookupFn is called for escape hatch questions. step is the current wizard step name.
+  type LookupFn func(ctx context.Context, question string, step string) (string, error)
+  ```
+  In the escape hatch case, pass `session.CurrentStep` as the step argument.
+
+  Update `newTestEngine` in `internal/wizard/engine_test.go`:
+  ```go
+  lookup := func(_ context.Context, q string, _ string) (string, error) {
+      return "lookup answer: " + q, nil
+  }
+  ```
+
+  Add one new test:
+  ```go
+  func TestEngine_EscapeHatch_PassesStepToLookup(t *testing.T) {
+      var capturedStep string
+      store := NewMemorySessionStore()
+      lookup := func(_ context.Context, q string, step string) (string, error) {
+          capturedStep = step
+          return "answer", nil
+      }
+      engine := NewWizardEngine(store, DefaultRegistry(), lookup)
+      engine.Handle(context.Background(), WizardRequest{SessionID: "s1", Wizard: "course_creation"})
+      engine.Handle(context.Background(), WizardRequest{
+          SessionID: "s1", Step: "subject_code", Question: "What format?",
+      })
+      assert.Equal(t, "subject_code", capturedStep)
+  }
+  ```
+
+  Update `cmd/server/main.go` `lookupFn` to accept `step string` and pass it to the rewriter:
+  ```go
+  lookupFn := func(ctx context.Context, q string, step string) (string, error) {
+      rewriteResult, _ := r.Rewrite(ctx, rewrite.RewriteRequest{
+          Question: q, Intent: "BannerUsage", Context: step,
+      })
+      resp, err := ac.AskBannerGuide(ctx, rewriteResult.Rewritten, "student")
+      if err != nil { return "", err }
+      return resp.Answer, nil
+  }
+  ```
+
+  Run: `go test ./... -v`
+
+- [ ] **H.5 — Wire `NewLLMRewriter` in `cmd/server/main.go` and update `CLAUDE.md`**
+
+  **Prompt for implementer:**
+  In `cmd/server/main.go`:
+  ```go
+  r := rewrite.NewLLMRewriter()
+  engine := wizard.NewWizardEngine(wizard.NewMemorySessionStore(), wizard.DefaultRegistry(), lookupFn)
+  handler := api.NewChatHandler(ac, engine, r)
+  ```
+  In `CLAUDE.md`:
+  - Add `internal/rewrite` to repo structure
+  - Update `NewChatHandler` to 3-parameter form
+  - Add `LookupFn: func(ctx, question, step string) (string, error)`
+  - Env vars: `ENABLE_QUERY_REWRITE`, `REWRITE_ENDPOINT`, `REWRITE_API_KEY`, `REWRITE_MODEL`
+
+  Run: `go build ./...` then `go test ./... -v`
+
+---
+
+### Phase H Acceptance Criteria
+
+- [ ] `go test ./... -v` passes with 0 failures
+- [ ] `ENABLE_QUERY_REWRITE=""` → `NewLLMRewriter()` returns `*NoopRewriter`
+- [ ] `LLMRewriter` on HTTP 500 → returns original question, `err == nil`
+- [ ] `/chat/ask` passes the rewritten question to the backend when `MockRewriter` is wired
+- [ ] Wizard escape hatch passes step name to `LookupFn`
+- [ ] `go build ./...` succeeds
+
+---
+
+## Phase I — Answer Grounding Verification (TDD)
+
+**Goal:** Port Phase 5B from the Java AI-ROADMAP. After citesearch returns an answer, optionally
+call Claude to verify the answer is supported by the retrieved source chunks. Returns a grounding
+verdict in `/chat/ask` response. Disabled by default (`ENABLE_GROUNDING=true` to activate).
+
+**Package structure (new):**
+```
+internal/ground/
+├── checker.go      → GroundingChecker interface + NoopChecker + LLMChecker + MockChecker
+└── checker_test.go
+```
+
+**Response change:** `/chat/ask` gains an optional `grounding` field (omitted when Noop):
+```json
+{ "answer":"...", "confidence":0.033, "escalate":false,
+  "grounding":{"verdict":"supported","note":""} }
+```
+
+**Handler change:** `NewChatHandler` gains a fourth parameter: `checker groundpkg.GroundingChecker`.
+
+---
+
+### Tasks
+
+- [ ] **I.1 — Define `GroundingChecker` interface and types**
+
+  **Prompt for implementer:**
+  Create `internal/ground/checker.go`:
+
+  ```go
+  package ground
+
+  import "context"
+
+  type Verdict string
+  const (
+      VerdictSupported   Verdict = "supported"
+      VerdictPartial     Verdict = "partial"
+      VerdictUnsupported Verdict = "unsupported"
+      VerdictSkipped     Verdict = "skipped"
+  )
+
+  type GroundingRequest struct {
+      Question string
+      Answer   string
+      Sources  []string // text of source chunks in retrieval order
+  }
+
+  type GroundingResult struct {
+      Verdict Verdict
+      Note    string // explanation for Partial/Unsupported; empty otherwise
+  }
+
+  type GroundingChecker interface {
+      Check(ctx context.Context, req GroundingRequest) (GroundingResult, error)
+  }
+
+  type NoopChecker struct{}
+  func (n *NoopChecker) Check(_ context.Context, _ GroundingRequest) (GroundingResult, error) {
+      return GroundingResult{Verdict: VerdictSkipped}, nil
+  }
+
+  type MockChecker struct {
+      CheckFn func(context.Context, GroundingRequest) (GroundingResult, error)
+  }
+  func (m *MockChecker) Check(ctx context.Context, req GroundingRequest) (GroundingResult, error) {
+      if m.CheckFn != nil { return m.CheckFn(ctx, req) }
+      return GroundingResult{Verdict: VerdictSkipped}, nil
+  }
+  ```
+
+  TDD in `internal/ground/checker_test.go`:
+  1. **RED**:
+     ```go
+     func TestNoopChecker_ReturnsSkipped(t *testing.T) {
+         c := &NoopChecker{}
+         result, err := c.Check(context.Background(), GroundingRequest{Question:"q",Answer:"a"})
+         require.NoError(t, err)
+         assert.Equal(t, VerdictSkipped, result.Verdict)
+         assert.Empty(t, result.Note)
+     }
+     ```
+  2. **GREEN** — types make this pass.
+
+  Run: `go test ./internal/ground/... -v`
+
+- [ ] **I.2 — Implement `LLMChecker` with httptest TDD**
+
+  **Prompt for implementer:**
+  Add `LLMChecker` to `internal/ground/checker.go`. Same raw `net/http` pattern.
+  `NewLLMChecker()` reads `ENABLE_GROUNDING`, `GROUNDING_ENDPOINT`, `GROUNDING_API_KEY`,
+  `GROUNDING_MODEL`. Returns `*NoopChecker` when disabled.
+
+  **System prompt:**
+  ```
+  You are a grounding verifier for a Banner ERP knowledge base chatbot.
+  Given a question, an answer, and source document chunks, determine if the answer is supported.
+  Respond with exactly ONE of:
+  - supported
+  - partial:<short reason>
+  - unsupported:<short reason>
+  Do not add any other text.
+  ```
+
+  Parse the response: split on ":" — first token is the verdict, remainder is the note.
+  On any error: return `VerdictSkipped`, `err: nil`.
+
+  TDD:
+  ```go
+  func TestLLMChecker_Supported(t *testing.T) { /* server returns "supported" → VerdictSupported, empty note */ }
+  func TestLLMChecker_Partial(t *testing.T) { /* "partial:missing details" → VerdictPartial, note="missing details" */ }
+  func TestLLMChecker_Unsupported(t *testing.T) { /* "unsupported:contradicts source" → VerdictUnsupported */ }
+  func TestLLMChecker_FallsBackOnError(t *testing.T) { /* 500 → VerdictSkipped, err==nil */ }
+  func TestNewLLMChecker_NoopWhenDisabled(t *testing.T) { /* ENABLE_GROUNDING="" → *NoopChecker */ }
+  ```
+
+  Run: `go test ./internal/ground/... -v`
+
+- [ ] **I.3 — Wire `GroundingChecker` into `/chat/ask` and update response type**
+
+  **Prompt for implementer:**
+  In `api/handlers.go`:
+  1. Add `GroundingInfo` and update the ask response struct:
+     ```go
+     type GroundingInfo struct {
+         Verdict string `json:"verdict"`
+         Note    string `json:"note,omitempty"`
+     }
+     // Add to ChatAskResponse (or whatever struct the handler marshals):
+     Grounding *GroundingInfo `json:"grounding,omitempty"`
+     ```
+  2. Update `NewChatHandler` to 4 parameters:
+     `(client AdapterClient, runner WizardRunner, rewriter rewritepkg.Rewriter, checker groundpkg.GroundingChecker)`
+  3. In `askHandler`, after getting a non-escalated `AdapterResponse`:
+     ```go
+     groundResult, _ := checker.Check(r.Context(), groundpkg.GroundingRequest{
+         Question: effectiveQuestion,
+         Answer:   resp.Answer,
+         Sources:  extractSourceTexts(resp.Sources), // []string of source text
+     })
+     if groundResult.Verdict != groundpkg.VerdictSkipped {
+         chatResp.Grounding = &GroundingInfo{Verdict: string(groundResult.Verdict), Note: groundResult.Note}
+     }
+     ```
+  4. Update all `NewChatHandler` call sites to include `&ground.NoopChecker{}`.
+
+  Add tests:
+  ```go
+  func TestChatAsk_GroundingIncluded_WhenPartial(t *testing.T) {
+      // MockChecker returns VerdictPartial → resp.grounding.verdict == "partial"
+  }
+  func TestChatAsk_GroundingOmitted_WhenSkipped(t *testing.T) {
+      // NoopChecker → "grounding" key absent from JSON response
+  }
+  ```
+
+  Run: `go test ./... -v`
+
+- [ ] **I.4 — Update `CLAUDE.md`**
+
+  **Prompt for implementer:**
+  - Add `internal/ground` to repo structure
+  - Update `NewChatHandler` to 4-parameter form
+  - Note: `grounding` field omitted from `/chat/ask` response when `ENABLE_GROUNDING != "true"`
+  - Env vars: `ENABLE_GROUNDING`, `GROUNDING_ENDPOINT`, `GROUNDING_API_KEY`, `GROUNDING_MODEL`
+
+---
+
+### Phase I Acceptance Criteria
+
+- [ ] `go test ./... -v` passes with 0 failures
+- [ ] `ENABLE_GROUNDING=""` → `NewLLMChecker()` returns `*NoopChecker`
+- [ ] `LLMChecker` on HTTP 500 → `VerdictSkipped`, `err == nil`
+- [ ] `/chat/ask` response includes `grounding` when checker returns Partial/Unsupported
+- [ ] `/chat/ask` response omits `grounding` field when `NoopChecker` is wired
+- [ ] `go build ./...` succeeds
+
+---
+
+## Phase J — Ask Log & Analytics (TDD)
+
+**Goal:** Port Phase 5E from the Java AI-ROADMAP. Log every `/chat/ask` invocation to NDJSON.
+Expose `GET /analytics/summary` for cost and quality trend queries.
+Disabled by default (`ASK_LOG_PATH` env var empty = no logging).
+
+**Package structure (new):**
+```
+internal/analytics/
+├── entry.go        → AskLogEntry struct
+├── logger.go       → AskLogger interface + NdjsonLogger + NoopLogger + MockLogger
+└── logger_test.go
+```
+
+**Handler change:** `NewChatHandler` gains a fifth parameter: `logger analytpkg.AskLogger`.
+
+---
+
+### Tasks
+
+- [ ] **J.1 — Define `AskLogEntry` and `AskLogger` in `internal/analytics/`**
+
+  **Prompt for implementer:**
+  Create `internal/analytics/entry.go`:
+  ```go
+  package analytics
+
+  import "time"
+
+  type AskLogEntry struct {
+      Timestamp  time.Time `json:"timestamp"`
+      SessionID  string    `json:"session_id"`
+      Intent     string    `json:"intent"`
+      Source     string    `json:"source"`
+      Confidence float64   `json:"confidence"`
+      Escalated  bool      `json:"escalated"`
+      Grounding  string    `json:"grounding,omitempty"`
+      DurationMs int64     `json:"duration_ms"`
+  }
+  ```
+
+  Create `internal/analytics/logger.go` with `AskLogger` interface, `NoopLogger`,
+  `NdjsonLogger` (append one JSON line per entry), and `MockLogger` (exported for tests):
+  ```go
+  type AskLogger interface { Log(ctx context.Context, entry AskLogEntry) error }
+
+  type NoopLogger struct{}
+  func (n *NoopLogger) Log(_ context.Context, _ AskLogEntry) error { return nil }
+
+  type NdjsonLogger struct { path string; mu sync.Mutex }
+  func NewNdjsonLogger(path string) *NdjsonLogger { return &NdjsonLogger{path: path} }
+
+  func NewDefaultLogger() AskLogger {
+      if p := os.Getenv("ASK_LOG_PATH"); p != "" { return NewNdjsonLogger(p) }
+      return &NoopLogger{}
+  }
+
+  type MockLogger struct { LogFn func(context.Context, AskLogEntry) error }
+  func (m *MockLogger) Log(ctx context.Context, e AskLogEntry) error {
+      if m.LogFn != nil { return m.LogFn(ctx, e) }
+      return nil
+  }
+  ```
+
+  `NdjsonLogger.Log`: open with `O_APPEND|O_CREATE|O_WRONLY`, write `json.Marshal(entry)+"\n"`, close.
+
+  TDD in `internal/analytics/logger_test.go`:
+  ```go
+  func TestNdjsonLogger_WritesEntry(t *testing.T) { /* temp file, write entry, assert JSON content */ }
+  func TestNdjsonLogger_AppendsMultiple(t *testing.T) { /* write 2, assert 2 lines */ }
+  func TestNoopLogger_NoError(t *testing.T) { /* always nil */ }
+  func TestNewDefaultLogger_ReturnsNoopWhenNoPath(t *testing.T) { /* ASK_LOG_PATH="" → *NoopLogger */ }
+  func TestNewDefaultLogger_ReturnsNdjsonWhenPathSet(t *testing.T) { /* path set → *NdjsonLogger */ }
+  ```
+
+  Run: `go test ./internal/analytics/... -v`
+
+- [ ] **J.2 — Wire `AskLogger` into `/chat/ask` — fire-and-forget goroutine**
+
+  **Prompt for implementer:**
+  Update `NewChatHandler` to 5 parameters. In `askHandler`, after sending the response:
+  ```go
+  start := time.Now()
+  // ... existing code ...
+  go func() {
+      _ = logger.Log(r.Context(), analytpkg.AskLogEntry{
+          Timestamp: time.Now(), SessionID: req.SessionID,
+          Intent: string(detectedIntent), Source: source,
+          Confidence: resp.Confidence, Escalated: resp.Escalate,
+          Grounding: string(groundResult.Verdict),
+          DurationMs: time.Since(start).Milliseconds(),
+      })
+  }()
+  ```
+  Logging must never block the response.
+
+  Update all `NewChatHandler` call sites: add `&analytpkg.NoopLogger{}`.
+
+  Add test:
+  ```go
+  func TestChatAsk_LogsEntry_Async(t *testing.T) {
+      var logged analytpkg.AskLogEntry
+      done := make(chan struct{})
+      mockLogger := &analytpkg.MockLogger{LogFn: func(_ context.Context, e analytpkg.AskLogEntry) error {
+          logged = e; close(done); return nil
+      }}
+      h := NewChatHandler(mockClient, noopRunner(), &rewritepkg.NoopRewriter{}, &ground.NoopChecker{}, mockLogger)
+      // POST /chat/ask ...
+      select { case <-done: case <-time.After(100*time.Millisecond): t.Fatal("log never called") }
+      assert.Equal(t, "banner", logged.Source)
+  }
+  ```
+
+  Run: `go test ./... -v`
+
+- [ ] **J.3 — Implement `GET /analytics/summary` endpoint**
+
+  **Prompt for implementer:**
+  Register route `/analytics/summary` in `NewChatHandler`. Handler reads `ASK_LOG_PATH`,
+  parses the NDJSON line-by-line, and returns:
+  ```json
+  {
+    "total_asks": 100, "escalation_rate": 0.12, "avg_confidence": 0.028,
+    "by_intent": {"BannerRelease":40}, "by_source": {"banner":58},
+    "by_grounding": {"supported":60,"partial":20,"unsupported":5,"skipped":15}
+  }
+  ```
+  If file missing or `ASK_LOG_PATH` empty: return `{"total_asks":0}` with 200.
+
+  TDD:
+  ```go
+  func TestAnalyticsSummary_EmptyPath_Returns200(t *testing.T) { /* total_asks:0 */ }
+  func TestAnalyticsSummary_WithData_ReturnsCorrectCounts(t *testing.T) {
+      // write 3 entries to temp file, set ASK_LOG_PATH, GET /analytics/summary
+      // assert total_asks=3, escalation_rate=0.333, by_intent.BannerRelease=2
+  }
+  ```
+
+  Run: `go test ./... -v`
+
+- [ ] **J.4 — Update `CLAUDE.md`**
+
+  **Prompt for implementer:**
+  - Add `internal/analytics` to repo structure
+  - Add `GET /analytics/summary` to the endpoint table
+  - Update `NewChatHandler` to 5-parameter form
+  - Env var: `ASK_LOG_PATH` (empty = disabled)
+
+---
+
+### Phase J Acceptance Criteria
+
+- [ ] `go test ./... -v` passes with 0 failures
+- [ ] `ASK_LOG_PATH=""` → `NewDefaultLogger()` returns `*NoopLogger`
+- [ ] Two `Log()` calls append two valid JSON lines to the NDJSON file
+- [ ] `GET /analytics/summary` with empty path returns `{"total_asks":0}`
+- [ ] `GET /analytics/summary` with 3 entries returns correct counts
+- [ ] Logging goroutine does not block `/chat/ask` response
+- [ ] `go build ./...` succeeds
+
+---
+
+## Phase K — Feedback Loop (TDD)
+
+**Goal:** Port Phase 5F from the Java AI-ROADMAP. Add `POST /chat/feedback` for thumbs up/down
+on chatbot answers. Store entries in NDJSON. Powers Agents 15 and 16 (analytics + feedback analyst).
+`FEEDBACK_LOG_PATH` env var (empty = disabled).
+
+**Package additions:** `FeedbackEntry` and `FeedbackLogger` in `internal/analytics/feedback.go`.
+
+**Handler change:** `NewChatHandler` gains a sixth parameter: `fb analytpkg.FeedbackLogger`.
+
+---
+
+### Tasks
+
+- [ ] **K.1 — Define `FeedbackEntry` and `FeedbackLogger` in `internal/analytics/feedback.go`**
+
+  **Prompt for implementer:**
+  Create `internal/analytics/feedback.go`:
+  ```go
+  package analytics
+
+  type FeedbackEntry struct {
+      Timestamp time.Time `json:"timestamp"`
+      SessionID string    `json:"session_id"`
+      MessageID string    `json:"message_id"`
+      Helpful   bool      `json:"helpful"`
+      Intent    string    `json:"intent,omitempty"`
+      Source    string    `json:"source,omitempty"`
+      Comment   string    `json:"comment,omitempty"`
+  }
+
+  type FeedbackLogger interface { LogFeedback(ctx context.Context, entry FeedbackEntry) error }
+
+  type NoopFeedbackLogger struct{}
+  func (n *NoopFeedbackLogger) LogFeedback(_ context.Context, _ FeedbackEntry) error { return nil }
+
+  type NdjsonFeedbackLogger struct { path string; mu sync.Mutex }
+  func NewNdjsonFeedbackLogger(path string) *NdjsonFeedbackLogger { return &NdjsonFeedbackLogger{path: path} }
+  func NewDefaultFeedbackLogger() FeedbackLogger {
+      if p := os.Getenv("FEEDBACK_LOG_PATH"); p != "" { return NewNdjsonFeedbackLogger(p) }
+      return &NoopFeedbackLogger{}
+  }
+
+  type MockFeedbackLogger struct { LogFn func(context.Context, FeedbackEntry) error }
+  func (m *MockFeedbackLogger) LogFeedback(ctx context.Context, e FeedbackEntry) error {
+      if m.LogFn != nil { return m.LogFn(ctx, e) }
+      return nil
+  }
+  ```
+  Implement `NdjsonFeedbackLogger.LogFeedback` (same append pattern as `NdjsonLogger.Log`).
+
+  TDD in `internal/analytics/feedback_test.go`:
+  ```go
+  func TestNdjsonFeedbackLogger_WritesEntry(t *testing.T) { /* temp file, write, assert JSON */ }
+  func TestNoopFeedbackLogger_NoError(t *testing.T) {}
+  func TestNewDefaultFeedbackLogger_NoopWhenEmpty(t *testing.T) {}
+  ```
+
+  Run: `go test ./internal/analytics/... -v`
+
+- [ ] **K.2 — Add `POST /chat/feedback` handler**
+
+  **Prompt for implementer:**
+  Update `NewChatHandler` to 6 parameters. Register `/chat/feedback`.
+
+  ```go
+  type feedbackRequest struct {
+      SessionID string `json:"session_id"`
+      MessageID string `json:"message_id"`
+      Helpful   bool   `json:"helpful"`
+      Intent    string `json:"intent,omitempty"`
+      Source    string `json:"source,omitempty"`
+      Comment   string `json:"comment,omitempty"`
+  }
+  ```
+  Validate `session_id` present (else 400). Write `FeedbackEntry`. Return `{"ok":true}`.
+
+  Update all `NewChatHandler` call sites: add `&analytpkg.NoopFeedbackLogger{}`.
+
+  TDD:
+  ```go
+  func TestFeedbackHandler_Helpful_Returns200(t *testing.T) {
+      // MockFeedbackLogger captures entry; assert session_id and helpful==true
+  }
+  func TestFeedbackHandler_MissingSessionID_Returns400(t *testing.T) {}
+  func TestFeedbackHandler_MethodNotAllowed(t *testing.T) { /* GET → 405 */ }
+  ```
+
+  Run: `go test ./... -v`
+
+- [ ] **K.3 — Update `CLAUDE.md`**
+
+  **Prompt for implementer:**
+  - Add `POST /chat/feedback  {session_id,message_id,helpful,intent?,source?,comment?}` to endpoint table
+  - Update `NewChatHandler` to 6-parameter form
+  - Env var: `FEEDBACK_LOG_PATH` (empty = disabled)
+
+---
+
+### Phase K Acceptance Criteria
+
+- [ ] `go test ./... -v` passes with 0 failures
+- [ ] `POST /chat/feedback {session_id:"s1",helpful:true}` → 200 `{"ok":true}`, entry written
+- [ ] `POST /chat/feedback {}` → 400 (missing session_id)
+- [ ] `FEEDBACK_LOG_PATH=""` → `NewDefaultFeedbackLogger()` returns `*NoopFeedbackLogger`
+- [ ] `go build ./...` succeeds

@@ -18,9 +18,15 @@ Each agent wraps the existing HTTP API as tools — no changes to the Go backend
 9. [Agent 8: Internal Banner Chatbot Agent](#agent-8-internal-banner-chatbot-agent)
 10. [Agent 9: Confidence Calibration Agent](#agent-9-confidence-calibration-agent)
 11. [Agent 10: Banner User Guide Navigation Agent](#agent-10-banner-user-guide-navigation-agent)
-12. [Tool Reference: API-to-Tool Mapping](#tool-reference-api-to-tool-mapping)
-13. [Implementation Notes](#implementation-notes)
-14. [Priority Recommendation](#priority-recommendation)
+12. [Agent 11: Banner Student Wizard Conductor](#agent-11-banner-student-wizard-conductor)
+13. [Agent 12: Wizard Test Harness Agent](#agent-12-wizard-test-harness-agent)
+14. [Agent 13: Query Rewriting Agent](#agent-13-query-rewriting-agent)
+15. [Agent 14: Answer Grounding Verifier Agent](#agent-14-answer-grounding-verifier-agent)
+16. [Agent 15: Analytics Advisor Agent](#agent-15-analytics-advisor-agent)
+17. [Agent 16: Feedback Pattern Analyst Agent](#agent-16-feedback-pattern-analyst-agent)
+18. [Tool Reference: API-to-Tool Mapping](#tool-reference-api-to-tool-mapping)
+19. [Implementation Notes](#implementation-notes)
+20. [Priority Recommendation](#priority-recommendation)
 
 ---
 
@@ -73,6 +79,9 @@ def run_tool(tool_name: str, tool_input: dict) -> str:
         "sop_ingest": lambda i: call_api("POST", "/sop/ingest", i),
         "index_health": lambda i: call_api("GET", "/health"),
         "index_stats": lambda i: call_api("GET", "/index/stats"),
+        "analytics_summary": lambda i: call_api("GET", "/analytics/summary"),
+        "feedback_report": lambda i: call_api("GET", "/analytics/feedback"),
+        "feedback_submit": lambda i: call_api("POST", "/chat/feedback", i),
     }
     result = dispatch[tool_name](tool_input)
     return json.dumps(result)
@@ -1238,6 +1247,905 @@ Source: Banner Student - Use - Ellucian.pdf, Section "Searching for Records", pa
 
 ---
 
+## Agent 11: Banner Student Wizard Conductor
+
+**Purpose:** Drive Banner Student guided workflow sessions for Botpress. Agent 11 is the
+human-facing wizard conductor — it receives a user's message each turn, decides whether
+the user is answering a prompt or asking a clarifying question, and calls `POST /student/wizard`
+to advance (or look up) accordingly. All session state lives server-side in the adapter.
+Botpress stays as a thin presentation layer.
+
+**Use case:** A registrar staff member types "I want to create a new course" — Agent 11
+identifies the wizard, generates a `session_id`, and guides the user step-by-step through all
+14 SCACRSE fields, rendering picklists as Quick Reply buttons. If the user asks "what does
+effective term mean?" mid-wizard, the agent sends it as a `question` (not a `value`), gets the
+citesearch answer, and resumes the same step.
+
+**Type:** Stateful multi-turn agent. One `session_id` per conversation, reused every turn.
+
+### Tools
+
+```python
+WIZARD_TOOLS = [
+    {
+        "name": "wizard_step",
+        "description": (
+            "Advance or look up one turn in a Banner Student wizard session. "
+            "On first call: set wizard to the target wizard name, leave step/value/question empty. "
+            "To submit a field answer: set step (current step name) and value (user's answer). "
+            "To handle a clarifying question mid-step: set step and question instead of value. "
+            "Returns prompt, next_step, options (picklist), or answer (escape hatch). "
+            "When next_step is 'review': display the review summary and await confirm/restart/edit."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {"type": "string", "description": "Stable session ID for this conversation"},
+                "wizard":     {"type": "string", "description": "Wizard name — required on init only (e.g. 'course_creation')"},
+                "step":       {"type": "string", "description": "Current step being answered (empty on init)"},
+                "value":      {"type": "string", "description": "User's field answer (mutually exclusive with question)"},
+                "question":   {"type": "string", "description": "User's clarifying question — triggers citesearch lookup"},
+            },
+            "required": ["session_id"],
+        },
+    }
+]
+```
+
+### Wizard Trigger Phrases
+
+| User says | Launch wizard |
+|---|---|
+| "create a course", "new course", "add a course", "SCACRSE" | `course_creation` |
+| *(Phase 2–4 wizards added as they are built)* | |
+
+### System Prompt
+
+```python
+WIZARD_CONDUCTOR_SYSTEM = """You are a Banner Student operations assistant for IT staff,
+curriculum coordinators, and registrar staff. You guide users step-by-step through
+Banner Student workflows using structured wizards.
+
+## Wizard session lifecycle
+
+1. Detect which wizard the user wants from their opening message (see trigger phrases below).
+2. Generate a UUID session_id once at conversation start. Reuse it every turn.
+3. Init the session: call wizard_step with session_id + wizard only (no step/value/question).
+4. Each subsequent turn: call wizard_step with session_id + step + either value OR question.
+5. Continue until next_step == "review" — display the review summary and await user action.
+
+## Wizard trigger phrases
+- course_creation: "create a course", "new course", "add a course", "SCACRSE"
+(additional wizards added here as they are built)
+
+## Question vs. value detection (decide before calling wizard_step)
+Populate the `question` field (not `value`) when the user's input:
+  - Ends with "?"
+  - Starts with: what, how, why, when, where, can, is, are, does, should
+Otherwise: populate `value` with the user's literal input.
+
+## Picklist fields
+When the response includes `options`, the user must choose from that list.
+Render options as Quick Reply buttons in Botpress. Reject free-text answers not in the list —
+wizard_step will return valid:false with the options list again.
+
+## Review node (next_step == "review")
+Display the review summary from resp.review.fields in a readable table.
+Present three choices:
+  - "confirm" → session complete, show final summary card
+  - "restart" → session cleared, offer to start over
+  - "edit <field_name>" → jump back to that field (send as "edit:<field_name>")
+
+## Escalation
+- 404 response: session not found (expired or never created). Tell the user and offer to restart.
+- Never answer Banner ERP questions from prior training knowledge. Use wizard_step for all workflow steps.
+- If the user asks something unrelated to Banner Student operations, reply:
+  "I can help with Banner Student workflows. Would you like to create a course or start another wizard?"
+"""
+```
+
+### Implementation
+
+```python
+import os
+import uuid
+import anthropic
+import requests
+import json
+
+ADAPTER_BASE_URL = os.environ["ADAPTER_BASE_URL"]  # e.g. http://localhost:8080
+
+client = anthropic.Anthropic()
+
+def run_wizard_tool(tool_input: dict) -> str:
+    resp = requests.post(
+        f"{ADAPTER_BASE_URL}/student/wizard",
+        json=tool_input,
+        headers={"Content-Type": "application/json"},
+    )
+    if resp.status_code == 404:
+        return json.dumps({"error": "session_not_found"})
+    resp.raise_for_status()
+    return resp.text  # already JSON
+
+def wizard_conductor_agent(user_message: str, session_id: str | None = None) -> tuple[str, str]:
+    """
+    Drive one turn of a wizard conversation.
+    Returns (assistant_reply, session_id) — caller persists session_id across turns.
+    """
+    if session_id is None:
+        session_id = str(uuid.uuid4())
+
+    messages = [{"role": "user", "content": user_message}]
+
+    # Inject session_id into context so the model always uses it
+    system = WIZARD_CONDUCTOR_SYSTEM + f"\n\nCurrent session_id: {session_id}"
+
+    while True:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            system=system,
+            tools=WIZARD_TOOLS,
+            messages=messages,
+        )
+
+        if response.stop_reason == "end_turn":
+            reply = next(b.text for b in response.content if b.type == "text")
+            return reply, session_id
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = run_wizard_tool(dict(block.input))
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+```
+
+### Example Session
+
+```
+User: I want to create a new course.
+
+Agent: [wizard_step(session_id="a1b2...", wizard="course_creation")]
+       → {next_step:"subject_code", prompt:"What is the subject code? (e.g. COMP, MATH, ENGL)"}
+
+Reply: Let's create a new course. First — what is the subject code? (e.g. COMP, MATH, ENGL)
+
+---
+
+User: COMP
+
+Agent: [wizard_step(session_id="a1b2...", step:"subject_code", value:"COMP")]
+       → {valid:true, next_step:"course_number", prompt:"What is the course number? (e.g. 3850, 101H)"}
+
+Reply: Got it — COMP. What is the course number? (e.g. 3850, 101H)
+
+---
+
+User: what does course number mean exactly?
+
+Agent: [wizard_step(session_id="a1b2...", step:"course_number", question:"what does course number mean?")]
+       → {answer:"Course numbers in Banner are 1–6 alphanumeric characters...",
+          resume_step:"course_number", prompt:"Got it — back to: What is the course number?"}
+
+Reply: Course numbers in Banner are 1–6 alphanumeric characters identifying the course within a subject.
+Back to: What is the course number for this course? (e.g. 3850, 101H)
+
+---
+
+User: 3850
+
+Agent: [wizard_step(session_id:"a1b2...", step:"course_number", value:"3850")]
+       → {valid:true, next_step:"short_title", ...}
+
+[... steps continue ...]
+
+---
+
+User: UG   ← selected from Quick Reply button for course_level
+
+Agent: [wizard_step(session_id:"a1b2...", step:"course_level", value:"UG")]
+       → {valid:true, next_step:"schedule_type", options:["Lecture","Lab","Seminar","Online","Hybrid"], ...}
+
+Reply: Course level set to Undergraduate. What is the schedule type?
+[Quick Reply buttons: Lecture | Lab | Seminar | Online | Hybrid]
+
+---
+
+[After all steps collected:]
+
+Agent: [wizard_step(session_id:"a1b2...", step:"status", value:"Active")]
+       → {valid:true, next_step:"review", review:{fields:{subject_code:"COMP", ...}, message:"Here's what I have..."}}
+
+Reply: Here's what I have for this course:
+| Field | Value |
+|---|---|
+| Subject Code | COMP |
+| Course Number | 3850 |
+| Short Title | Software Engineering |
+| Credit Hours | 3 |
+| Course Level | UG |
+| Schedule Type | Lecture |
+| Grading Mode | Standard |
+| College | AS |
+| Department | COMP |
+| Effective Term | 202510 |
+| Status | Active |
+
+Does everything look correct? Reply **confirm**, **restart**, or **edit <field>** to change a field.
+
+---
+
+User: confirm
+
+Agent: [wizard_step(session_id:"a1b2...", step:"review", value:"confirm")]
+       → {session:{complete:true}, review:{fields:{...}}}
+
+Reply: Course created successfully. Here is your summary — forward this to the Banner admin for entry in SCACRSE:
+COMP 3850 — Software Engineering | UG | Lecture | 3 credits | Spring 2025 | Active
+```
+
+---
+
+## Agent 12: Wizard Test Harness Agent
+
+**Purpose:** Automated end-to-end validation of wizard step sequences. No human in the loop.
+Given a wizard name and its step sequence, Agent 12 drives two complete passes:
+
+1. **Golden path** — submits a known-valid value for every step; every step should return `valid:true`.
+2. **Error path** — for each step with validation rules, submits one known-invalid value; every
+   such step should return `valid:false` with a descriptive error message.
+
+Produces a Markdown test report table. Use this as a pre-merge check whenever a new
+wizard step sequence is added to `internal/wizard/catalog.go`.
+
+**Use case:** A developer adds `modify_course` steps to `catalog.go` and registers the wizard.
+Before merging, they run Agent 12 (`python agents/wizard_harness.py modify_course`) and verify
+all cells in the report are PASS.
+
+**Type:** Automated test agent. Not interactive. Runs to completion and returns the report.
+
+### Tools
+
+```python
+# Reuses WIZARD_TOOLS from Agent 11 — same wizard_step tool, same dispatcher.
+```
+
+### Test Value Map for `course_creation`
+
+Embed this in the system prompt as context so the agent drives the right inputs.
+
+```python
+COURSE_CREATION_TEST_CASES = [
+    # step, valid_input, invalid_input, why_invalid
+    ("subject_code",  "COMP",              "comp",          "lowercase not allowed"),
+    ("course_number", "3850",              "",              "empty not allowed"),
+    ("short_title",   "Software Eng",      "A" * 31,        "exceeds 30 char max"),
+    ("long_title",    "skip",              "A" * 101,       "exceeds 100 char max"),
+    ("credit_hours",  "3",                 "0",             "zero not allowed"),
+    ("course_level",  "UG",               "GRADUATE",      "not in options list"),
+    ("schedule_type", "Lecture",           "Workshop",      "not in options list"),
+    ("grading_mode",  "Standard",          "Honors",        "not in options list"),
+    ("college",       "AS",               "a",             "lowercase not allowed"),
+    ("department",    "COMP",             "c",             "lowercase not allowed"),
+    ("prerequisites", "none",             None,            None),  # optional, skip error path
+    ("corequisites",  "none",             None,            None),  # optional, skip error path
+    ("effective_term","202510",           "202540",        "invalid term suffix"),
+    ("status",        "Active",           "Done",          "not in options list"),
+]
+```
+
+### System Prompt
+
+```python
+WIZARD_HARNESS_SYSTEM = """You are an automated test harness for Banner Student wizard step sequences.
+Your job is to validate a wizard's golden path and error path with no human interaction.
+
+## Protocol
+
+Given a wizard name and test case table (provided in user message), run two passes:
+
+### Pass 1 — Golden Path
+1. Init a fresh session: wizard_step(session_id=<new_uuid>, wizard=<wizard_name>)
+2. For each step in the test table (in order): submit the valid_input value.
+3. Assert resp.valid == true for each step. Record PASS or FAIL.
+4. Continue until next_step == "review". Do NOT confirm — stop after reaching review.
+
+### Pass 2 — Error Path
+For each test case where invalid_input is not None:
+1. Init a fresh session (new UUID each time, or reuse if session is still at the same step).
+   Simpler: start a fresh session and advance to the target step using golden path values,
+   then submit the invalid input at that step.
+2. Assert resp.valid == false. Assert resp.prompt contains an error message (non-empty).
+3. Record PASS or FAIL.
+
+## Output format
+
+### Golden Path Results
+| Step | Input | valid | next_step | PASS/FAIL |
+|---|---|---|---|---|
+| subject_code | COMP | true | course_number | PASS |
+...
+
+### Error Path Results
+| Step | Invalid Input | Why | valid | prompt_has_error | PASS/FAIL |
+|---|---|---|---|---|---|
+| subject_code | comp | lowercase | false | yes | PASS |
+...
+
+### Summary
+- Golden path: X/Y steps PASS
+- Error path: X/Y steps PASS
+- CRITICAL FAILURES (valid:true on invalid input): [list or "none"]
+
+CRITICAL: A valid:true response on a known-invalid input is a critical failure — flag it prominently.
+A valid:false response on a known-valid input is also a critical failure.
+"""
+```
+
+### Implementation
+
+```python
+import os
+import uuid
+import json
+import anthropic
+import requests
+
+ADAPTER_BASE_URL = os.environ["ADAPTER_BASE_URL"]
+
+client = anthropic.Anthropic()
+
+def run_wizard_tool(tool_input: dict) -> str:
+    resp = requests.post(
+        f"{ADAPTER_BASE_URL}/student/wizard",
+        json=tool_input,
+        headers={"Content-Type": "application/json"},
+    )
+    resp.raise_for_status()
+    return resp.text
+
+def wizard_harness_agent(wizard_name: str, test_cases: list[tuple]) -> str:
+    """Run golden + error path tests for a wizard. Returns Markdown test report."""
+    context = f"""
+Run the full test harness for wizard: '{wizard_name}'
+
+Test cases:
+{json.dumps([{"step": tc[0], "valid_input": tc[1], "invalid_input": tc[2], "why_invalid": tc[3]} for tc in test_cases], indent=2)}
+
+Generate a new UUID for each session. Drive all steps in sequence.
+Produce the full Markdown report as specified in your instructions.
+"""
+    messages = [{"role": "user", "content": context}]
+
+    while True:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=4096,
+            system=WIZARD_HARNESS_SYSTEM,
+            tools=WIZARD_TOOLS,
+            messages=messages,
+        )
+
+        if response.stop_reason == "end_turn":
+            return next(b.text for b in response.content if b.type == "text")
+
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = run_wizard_tool(dict(block.input))
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+
+if __name__ == "__main__":
+    report = wizard_harness_agent("course_creation", COURSE_CREATION_TEST_CASES)
+    print(report)
+```
+
+### Example Output
+
+```markdown
+## Wizard Test Harness Report — course_creation — 2026-04-21
+
+### Golden Path Results
+| Step | Input | valid | next_step | PASS/FAIL |
+|---|---|---|---|---|
+| subject_code | COMP | true | course_number | PASS |
+| course_number | 3850 | true | short_title | PASS |
+| short_title | Software Eng | true | long_title | PASS |
+| long_title | skip | true | credit_hours | PASS |
+| credit_hours | 3 | true | course_level | PASS |
+| course_level | UG | true | schedule_type | PASS |
+| schedule_type | Lecture | true | grading_mode | PASS |
+| grading_mode | Standard | true | college | PASS |
+| college | AS | true | department | PASS |
+| department | COMP | true | prerequisites | PASS |
+| prerequisites | none | true | corequisites | PASS |
+| corequisites | none | true | effective_term | PASS |
+| effective_term | 202510 | true | status | PASS |
+| status | Active | true | review | PASS |
+
+### Error Path Results
+| Step | Invalid Input | Why | valid | prompt_has_error | PASS/FAIL |
+|---|---|---|---|---|---|
+| subject_code | comp | lowercase | false | yes | PASS |
+| course_number | (empty) | empty not allowed | false | yes | PASS |
+| short_title | AAAA...(31) | exceeds 30 chars | false | yes | PASS |
+| long_title | AAAA...(101) | exceeds 100 chars | false | yes | PASS |
+| credit_hours | 0 | zero not allowed | false | yes | PASS |
+| course_level | GRADUATE | not in options | false | yes | PASS |
+| schedule_type | Workshop | not in options | false | yes | PASS |
+| grading_mode | Honors | not in options | false | yes | PASS |
+| college | a | lowercase | false | yes | PASS |
+| department | c | lowercase | false | yes | PASS |
+| effective_term | 202540 | invalid term suffix | false | yes | PASS |
+| status | Done | not in options | false | yes | PASS |
+
+### Summary
+- Golden path: 14/14 PASS
+- Error path: 12/12 PASS
+- CRITICAL FAILURES: none
+```
+
+### Contrast with Other Agents
+
+| Agent | Audience | Interaction mode | Output |
+|---|---|---|---|
+| Agent 11 — Wizard Conductor | Banner staff via Botpress | Human-in-the-loop, multi-turn | Conversational guided wizard |
+| **Agent 12 — Test Harness** | **Developer pre-merge** | **Automated, no human** | **Markdown test report** |
+
+---
+
+## Agent 13: Query Rewriting Agent
+
+**Purpose:** Expand terse or ambiguous Banner ERP questions before routing to citesearch.
+Uses Claude to add synonyms, expand acronyms (GL→General Ledger, AR→Accounts Receivable),
+and add module context. Improves retrieval for single-word or vague questions. Deployed as
+a preprocessing step inside the Go adapter (Phase H) and available standalone for testing.
+
+**Use case:** A staff member types "GL changes" — Agent 13 rewrites it to "What changed in
+the Banner Finance General Ledger module in recent releases?" before the citesearch call.
+Also improves wizard escape hatch lookups (e.g. "what is effective term?" at the wizard step).
+
+**Type:** Single-turn transformation agent. One tool call, one structured response.
+
+**Java AI-ROADMAP origin:** Phase 5A — Query Rewriting for AI Reporter (ported to Go adapter).
+
+### Tools
+
+```python
+QUERY_REWRITER_TOOLS = [
+    {
+        "name": "query_expand",
+        "description": (
+            "Expand a terse Banner ERP question into a more specific, retrievable form. "
+            "Provide the original question and the detected intent. "
+            "Returns the rewritten question and a changed flag."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "Original user question"},
+                "intent":   {"type": "string", "description": "Detected intent: BannerRelease, BannerFinance, SopQuery, BannerAdmin, BannerUsage, General"},
+                "context":  {"type": "string", "description": "Optional wizard step name for escape hatch queries"},
+            },
+            "required": ["question", "intent"],
+        },
+    }
+]
+```
+
+### System Prompt
+
+```python
+QUERY_REWRITER_SYSTEM = """You are a query expansion assistant for an Ellucian Banner ERP knowledge base.
+When asked to expand a question, rewrite it to be more specific and retrievable.
+
+Expansion rules by intent:
+- BannerFinance: expand GL→General Ledger, AR→Accounts Receivable, AP→Accounts Payable, budget codes
+- BannerRelease: add "release notes" or "changelog" context if missing
+- SopQuery: add "procedure" or "step-by-step" context
+- BannerAdmin: add "configuration" or "setup" context
+- BannerUsage: add "Banner ERP form" or "navigate" context
+
+General rules:
+- Keep the rewrite under 2 sentences
+- If the question is already specific, return it unchanged
+- Respond with ONLY the rewritten question. No explanation, no prefix.
+"""
+```
+
+### Implementation
+
+```python
+def run_query_rewriter_tool(tool_input: dict) -> str:
+    """Standalone: call Claude directly to expand the question."""
+    question = tool_input["question"]
+    intent = tool_input.get("intent", "General")
+    context = tool_input.get("context", "")
+
+    context_note = f"\nWizard step context: {context}" if context else ""
+    user_msg = f"Intent: {intent}{context_note}\nQuestion: {question}\n\nExpand this question:"
+
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=256,
+        system=QUERY_REWRITER_SYSTEM,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    rewritten = next(b.text for b in response.content if b.type == "text").strip()
+    changed = rewritten.lower() != question.lower()
+    return json.dumps({"original": question, "rewritten": rewritten, "changed": changed})
+
+def query_rewriter_agent(question: str, intent: str, context: str = "") -> dict:
+    """Standalone invocation — returns {original, rewritten, changed}."""
+    result = run_query_rewriter_tool({"question": question, "intent": intent, "context": context})
+    return json.loads(result)
+```
+
+### Example
+
+```
+Input:  question="GL changes", intent="BannerFinance"
+Output: {"original":"GL changes",
+         "rewritten":"What changed in the Banner Finance General Ledger module in recent releases?",
+         "changed":true}
+
+Input:  question="What changed in Banner General 9.3.37.2?", intent="BannerRelease"
+Output: {"original":"What changed in Banner General 9.3.37.2?",
+         "rewritten":"What changed in Banner General 9.3.37.2?",
+         "changed":false}
+```
+
+---
+
+## Agent 14: Answer Grounding Verifier Agent
+
+**Purpose:** Given a citesearch answer and its source document chunks, verify whether the
+answer is fully supported by the sources. Catches hallucinated or overreaching answers before
+they reach staff users. Deployed as a post-processing step in the Go adapter (Phase I) and
+available standalone for manual auditing.
+
+**Use case:** After Banner release note Q&A, the verifier flags answers that add details not
+present in the retrieved chunks ("partial") or contradict the sources ("unsupported").
+
+**Type:** Single-turn verification agent. Returns a structured verdict.
+
+**Java AI-ROADMAP origin:** Phase 5B — Grounding Check / Hallucination Guard (ported to Go).
+
+### Tools
+
+```python
+GROUNDING_TOOLS = [
+    {
+        "name": "grounding_check",
+        "description": (
+            "Verify whether an answer is supported by its source document chunks. "
+            "Returns verdict: supported, partial, or unsupported with a short note."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "answer":   {"type": "string"},
+                "sources":  {"type": "array", "items": {"type": "string"}, "description": "Source text chunks in retrieval order"},
+            },
+            "required": ["question", "answer", "sources"],
+        },
+    }
+]
+```
+
+### System Prompt
+
+```python
+GROUNDING_SYSTEM = """You are a grounding verifier for a Banner ERP knowledge base chatbot.
+Given a question, an answer, and source document chunks, determine if the answer is supported.
+
+Respond with exactly ONE line — no other text:
+- supported          (answer fully backed by sources)
+- partial:<reason>   (answer partially backed; state concisely what is missing or added)
+- unsupported:<reason> (answer contradicts or is entirely absent from sources)
+"""
+```
+
+### Implementation
+
+```python
+def run_grounding_tool(tool_input: dict) -> str:
+    question = tool_input["question"]
+    answer   = tool_input["answer"]
+    sources  = tool_input.get("sources", [])
+
+    sources_text = "\n---\n".join(f"Source {i+1}: {s}" for i, s in enumerate(sources))
+    user_msg = f"Question: {question}\n\nAnswer: {answer}\n\nSources:\n{sources_text}"
+
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=128,
+        system=GROUNDING_SYSTEM,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    raw = next(b.text for b in response.content if b.type == "text").strip()
+    parts = raw.split(":", 1)
+    verdict = parts[0].strip()
+    note    = parts[1].strip() if len(parts) > 1 else ""
+    return json.dumps({"verdict": verdict, "note": note})
+
+def grounding_agent(question: str, answer: str, sources: list[str]) -> dict:
+    result = run_grounding_tool({"question": question, "answer": answer, "sources": sources})
+    return json.loads(result)
+```
+
+### Example
+
+```
+Input:
+  question = "What database changes are required for Banner General 9.3.37?"
+  answer   = "Run GENUPGRADE.sql and update the GZRSTAT index. Also update Java to 21."
+  sources  = ["Run GENUPGRADE.sql before restart. Update GZRSTAT index (page 4)."]
+
+Output: {"verdict":"partial","note":"Java 21 requirement not mentioned in sources"}
+
+---
+
+Input:
+  question = "What changed in Banner Finance?"
+  answer   = "Banner Finance added a new accounts payable workflow."
+  sources  = ["Banner Finance 9.3.37 updated the GL posting process."]
+
+Output: {"verdict":"unsupported","note":"AP workflow not mentioned; sources discuss GL posting"}
+```
+
+---
+
+## Agent 15: Analytics Advisor Agent
+
+**Purpose:** Answer natural language questions about the `/chat/ask` usage log. Surfaces
+escalation rates, cost trends, intent distribution, and grounding quality without requiring
+manual jq queries. Reads from `GET /analytics/summary`.
+
+**Use case:** A team lead asks "What's our escalation rate this week?" or "Which intent
+escalates most often?" — Agent 15 queries the analytics endpoint and synthesizes a report.
+
+**Type:** Multi-turn advisory agent. Calls analytics and optionally feedback endpoints.
+
+**Java AI-ROADMAP origin:** Phase 5E — Ask Log & Analytics + Phase 5F — Feedback Loop (ported).
+
+### Tools
+
+```python
+ANALYTICS_TOOLS = [
+    {
+        "name": "analytics_summary",
+        "description": (
+            "Get aggregate statistics from the ask log: total asks, escalation rate, "
+            "avg confidence, breakdowns by intent and source, grounding distribution."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "feedback_report",
+        "description": "Get aggregate feedback statistics: helpful vs. unhelpful counts by intent and source.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+```
+
+### System Prompt
+
+```python
+ANALYTICS_ADVISOR_SYSTEM = """You are an analytics advisor for the Ask Banner chatbot.
+Answer questions about usage quality using the analytics_summary and feedback_report tools.
+
+Guidelines:
+- Always call analytics_summary first before answering any usage question.
+- Call feedback_report when the user asks about answer quality or thumbs-down patterns.
+- Express escalation_rate as a percentage (e.g. 12%).
+- Flag any intent with escalation_rate > 30% as needing attention.
+- Note: Azure AI Search confidence scores are typically 0.01–0.05 for valid answers.
+  avg_confidence below 0.01 indicates a retrieval problem, not a Claude problem.
+- Present findings as bullet points. Lead with the most actionable insight.
+"""
+```
+
+### Implementation
+
+```python
+ANALYTICS_ADAPTER_BASE_URL = os.environ["ADAPTER_BASE_URL"]
+
+def run_analytics_tool(tool_name: str, _: dict) -> str:
+    if tool_name == "analytics_summary":
+        return json.dumps(call_api("GET", "/analytics/summary"))
+    if tool_name == "feedback_report":
+        return json.dumps(call_api("GET", "/analytics/feedback"))
+    return json.dumps({"error": "unknown tool"})
+
+def analytics_advisor_agent(question: str) -> str:
+    messages = [{"role": "user", "content": question}]
+    while True:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=ANALYTICS_ADVISOR_SYSTEM,
+            tools=ANALYTICS_TOOLS,
+            messages=messages,
+        )
+        if response.stop_reason == "end_turn":
+            return next(b.text for b in response.content if b.type == "text")
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = run_analytics_tool(block.name, dict(block.input))
+                tool_results.append({"type":"tool_result","tool_use_id":block.id,"content":result})
+        messages.append({"role":"assistant","content":response.content})
+        messages.append({"role":"user","content":tool_results})
+```
+
+### Example
+
+```
+User: What's our escalation rate and which intent is worst?
+
+Agent: [calls analytics_summary]
+       → {total_asks:150, escalation_rate:0.18, by_intent:{BannerRelease:60,SopQuery:40,BannerFinance:30,...}}
+
+Answer:
+- Overall escalation rate: **18%** across 150 asks
+- Worst intent: **BannerFinance** — 43% escalation rate ⚠ (Finance documents may not be fully indexed)
+- Best intent: **SopQuery** — 5% escalation rate ✓
+- Avg confidence for non-escalated answers: 0.031 (healthy for this index)
+- Recommendation: Run a diagnostic (Agent 7) on the Finance module index
+```
+
+---
+
+## Agent 16: Feedback Pattern Analyst Agent
+
+**Purpose:** Analyze accumulated thumbs-down feedback to identify which intents, sources, or
+question patterns consistently produce unhelpful answers. Generates a prioritized list of
+prompt or retrieval improvements. Designed to be run weekly by a team lead.
+
+**Use case:** After a week of staff usage, run this agent to find out "why are Finance answers
+getting thumbs down?" and get specific recommendations (e.g. "Finance index needs more release
+note PDFs" or "BannerFinance intent keywords need refinement").
+
+**Type:** Analytical report agent. Multi-tool, returns a Markdown report.
+
+**Java AI-ROADMAP origin:** Phase 5F — Feedback Loop (ported to Go) + Phase 5B grounding patterns.
+
+### Tools
+
+```python
+FEEDBACK_ANALYST_TOOLS = [
+    {
+        "name": "feedback_report",
+        "description": "Get all feedback entries grouped by helpfulness, intent, and source.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "analytics_summary",
+        "description": "Get overall usage stats to correlate with feedback patterns.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "banner_ask",
+        "description": "Test a specific query to verify if retrieval is the root cause of thumbs-down.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "module_filter": {"type": "string"},
+                "top_k": {"type": "integer", "default": 3},
+            },
+            "required": ["question"],
+        },
+    },
+]
+```
+
+### System Prompt
+
+```python
+FEEDBACK_ANALYST_SYSTEM = """You are a feedback pattern analyst for the Ask Banner chatbot.
+Your job is to identify WHY answers are receiving thumbs-down and recommend fixes.
+
+Protocol:
+1. Call feedback_report to get unhelpful answer patterns.
+2. Call analytics_summary to correlate with escalation and confidence data.
+3. Group thumbs-down by: intent, source, and any visible question pattern.
+4. For the top 3 thumbs-down intents: call banner_ask with a representative question
+   to verify if retrieval itself is the problem (low score, 0 results) or if it's a
+   prompt/answer quality issue.
+5. Produce a Markdown report:
+
+## Feedback Analysis — [date]
+### Thumbs-Down Distribution
+[table: intent | count | % of total asks | likely cause]
+
+### Root Cause Investigation
+[For each tested query: question, retrieval_count, score, verdict: retrieval_gap or prompt_gap]
+
+### Recommendations (prioritized)
+1. [Highest impact fix]
+2. ...
+
+### Next Review
+[Suggest when to re-run based on volume]
+"""
+```
+
+### Implementation
+
+```python
+def feedback_analyst_agent() -> str:
+    """Run the full feedback analysis. Returns a Markdown report string."""
+    messages = [{"role": "user", "content": "Run a full feedback pattern analysis for this week."}]
+    dispatch = {
+        "feedback_report":  lambda i: call_api("GET", "/analytics/feedback"),
+        "analytics_summary": lambda i: call_api("GET", "/analytics/summary"),
+        "banner_ask":       lambda i: call_api("POST", "/banner/ask", i),
+    }
+    while True:
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=2048,
+            system=FEEDBACK_ANALYST_SYSTEM,
+            tools=FEEDBACK_ANALYST_TOOLS,
+            messages=messages,
+        )
+        if response.stop_reason == "end_turn":
+            return next(b.text for b in response.content if b.type == "text")
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = json.dumps(dispatch[block.name](dict(block.input)))
+                tool_results.append({"type":"tool_result","tool_use_id":block.id,"content":result})
+        messages.append({"role":"assistant","content":response.content})
+        messages.append({"role":"user","content":tool_results})
+```
+
+### Example Output
+
+```markdown
+## Feedback Analysis — 2026-04-21
+
+### Thumbs-Down Distribution
+| Intent | Thumbs-Down | % of Asks | Likely Cause |
+|---|---|---|---|
+| BannerFinance | 12 | 40% | Finance index may be incomplete |
+| BannerUsage | 5 | 15% | User guide chunks too sparse |
+| General | 2 | 5% | Vague catch-all questions |
+
+### Root Cause Investigation
+- "What are the Finance AR posting rules?" → retrieval_count=0, score=0 → **retrieval_gap**: Finance AR not indexed
+- "How do I navigate Banner Finance forms?" → retrieval_count=2, score=0.008 → **retrieval_gap**: low score, answer thin
+- "What changed in Banner Finance?" → retrieval_count=4, score=0.031 → **prompt_gap**: answer accurate but too terse
+
+### Recommendations
+1. **Ingest Finance AR release note PDFs** — root cause of 40% thumbs-down (Agent 5 task)
+2. **Add more Finance user guide pages** — improves BannerUsage retrieval for Finance forms
+3. **Improve BannerFinance answer verbosity** — scores are fine; prompt needs richer formatting
+
+### Next Review
+Re-run after Finance AR PDFs are ingested or after 50+ new feedback entries accumulate.
+```
+
+---
+
 ## Tool Reference: API-to-Tool Mapping
 
 | Tool Name | HTTP Method | Endpoint | Agent(s) Using It |
@@ -1256,6 +2164,12 @@ Source: Banner Student - Use - Ellucian.pdf, Section "Searching for Records", pa
 | (calibration protocol) | POST | `/banner/ask` | 9 |
 | (calibration protocol) | GET | `/index/stats` | 9 |
 | `user_guide_ask` | POST | `/banner/:module/ask` (source_type=banner_user_guide) | 10 |
+| `wizard_step` | POST | `/student/wizard` | 11, 12 |
+| `query_expand` | POST | `/chat/rewrite` (or direct Claude call) | 13 |
+| `grounding_check` | POST | `/chat/ground` (or direct Claude call) | 14 |
+| `analytics_summary` | GET | `/analytics/summary` | 15, 16 |
+| `feedback_report` | GET | `/analytics/feedback` | 15, 16 |
+| `feedback_submit` | POST | `/chat/feedback` | 8 (extended) |
 
 ---
 
@@ -1266,17 +2180,23 @@ Source: Banner Student - Use - Ellucian.pdf, Section "Searching for Records", pa
 ```
 agents/
 ├── __init__.py
-├── common.py          # run_tool dispatcher, API client setup
-├── banner_ask.py      # Agent 1
-├── sop_navigator.py   # Agent 2
-├── upgrade_analyzer.py # Agent 3
-├── conversational.py  # Agent 4
-├── ingestion.py       # Agent 5
-├── gap_analyzer.py    # Agent 6
-├── diagnostics.py     # Agent 7
-├── calibration.py     # Agent 9
-├── user_guide.py      # Agent 10
-└── cli.py             # Entry point: pick agent by command-line arg
+├── common.py              # run_tool dispatcher, API client setup
+├── banner_ask.py          # Agent 1
+├── sop_navigator.py       # Agent 2
+├── upgrade_analyzer.py    # Agent 3
+├── conversational.py      # Agent 4
+├── ingestion.py           # Agent 5
+├── gap_analyzer.py        # Agent 6
+├── diagnostics.py         # Agent 7
+├── calibration.py         # Agent 9
+├── user_guide.py          # Agent 10
+├── wizard_conductor.py    # Agent 11
+├── wizard_harness.py      # Agent 12
+├── query_rewriter.py      # Agent 13
+├── grounding.py           # Agent 14
+├── analytics.py           # Agent 15
+├── feedback_analyst.py    # Agent 16
+└── cli.py                 # Entry point: pick agent by command-line arg
 ```
 
 ### Confidence Escalation (all agents)
@@ -1309,6 +2229,12 @@ def check_confidence(api_result: dict) -> str | None:
 | Internal Banner Chatbot (Agent 8) | `claude-haiku-4-5` | < $0.002 per turn |
 | Confidence Calibration (Agent 9) | `claude-haiku-4-5` | < $0.005 per run |
 | User Guide Navigation (Agent 10) | `claude-haiku-4-5` | < $0.001 per turn |
+| Banner Student Wizard Conductor (Agent 11) | `claude-haiku-4-5` | < $0.002 per turn |
+| Wizard Test Harness (Agent 12) | `claude-haiku-4-5` | < $0.01 per wizard run |
+| Query Rewriting (Agent 13) | `claude-haiku-4-5` | < $0.001 per call |
+| Answer Grounding (Agent 14) | `claude-haiku-4-5` | < $0.001 per check |
+| Analytics Advisor (Agent 15) | `claude-haiku-4-5` | < $0.005 per query |
+| Feedback Pattern Analyst (Agent 16) | `claude-sonnet-4-6` | < $0.02 per weekly report |
 
 Azure OpenAI costs (embedding + chat) remain the same regardless of which Claude model is used.
 
@@ -1343,6 +2269,26 @@ tool dispatch loop and prompt logic without incurring API costs.
 8. **Agent 8 — Internal Banner Chatbot**: Wraps the adapter `/chat/*` layer with intent
    classification, sentiment-aware escalation, and a Banner-admin persona. This is the
    agent Botpress calls.
+
+**Wizard system (deploy after Phase F is complete):**
+
+9. **Agent 11 — Wizard Conductor**: The Botpress integration point for all Banner Student
+   wizard sessions. Replaces per-wizard Execute Code with a single generic conductor that
+   handles all wizard types via `POST /student/wizard`.
+10. **Agent 12 — Wizard Test Harness**: Run before merging any new wizard step sequence
+    into `catalog.go`. Automates golden-path + error-path validation so manual testing
+    of 14-step forms is not required.
+
+**Java AI-ROADMAP ports (deploy after Phases H–K are complete):**
+
+11. **Agent 13 — Query Rewriting**: Deployed inside the adapter as a pre-retrieval step.
+    Run standalone to test how query expansion changes citesearch results for terse questions.
+12. **Agent 14 — Grounding Verifier**: Run on demand to audit answer quality. Most valuable
+    for Finance and SOP answers where hallucination risk is highest.
+13. **Agent 15 — Analytics Advisor**: Weekly review of escalation rate and intent distribution.
+    First signal that the index needs new documents or a prompt needs adjustment.
+14. **Agent 16 — Feedback Analyst**: Run after 50+ feedback entries accumulate. Generates
+    a prioritized remediation list distinguishing retrieval gaps from prompt quality issues.
 
 ---
 
