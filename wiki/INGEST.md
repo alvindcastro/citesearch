@@ -495,77 +495,77 @@ The folder-based ingest (`POST /banner/ingest`) requires the operator to place f
 server's local `data/docs/` directory. In cloud deployments (Fly.io, remote Docker) this is
 impractical — there is no SSH access and no persistent local filesystem.
 
-Phase M introduces two new ingest paths that do not require filesystem access:
+Phase U introduces upload paths that do not require filesystem access:
 
 | Path | Endpoint | Best for |
 |---|---|---|
 | Folder-based (existing) | `POST /banner/ingest` | Local dev, bulk initial ingest from disk |
 | Azure Blob sync (existing) | `POST /banner/blob/sync` | Production, pre-populated Blob container |
-| Direct upload (Phase M.2) | `POST /banner/upload` | Ad-hoc single-file ingest from anywhere |
-| URL-based (Phase M.4) | `POST /banner/upload/from-url` | Ellucian ECC download links, automation |
+| Upload — multipart (Phase U.5) | `POST /banner/upload` | Ad-hoc file upload to Blob. Creates sidecar. Does not chunk. |
+| Upload — from URL (Phase U.6) | `POST /banner/upload/from-url` | Ellucian ECC download links, automation. Creates sidecar. Does not chunk. |
+| Chunk (Phase U.7) | `POST /banner/upload/chunk` | Chunk a page range of an uploaded PDF. |
+| Status/list/delete (Phase U.8/U.9) | `GET /banner/upload...`, `DELETE /banner/upload/{id}` | Manage sidecar-backed upload state. |
 
 ---
 
 ### How the upload path works
 
-The key insight: the ingest pipeline derives all metadata from the **file path**. An upload
-handler can reconstruct the canonical folder path from the user-supplied metadata fields,
-write the file there, then call the same `ingest.Run()` function. Zero changes to the ingest
-pipeline — only a new HTTP handler.
+The upload flow is decoupled from chunking. An upload handler validates metadata, synthesizes
+the Blob path, writes the PDF to Azure Blob Storage, counts pages with `ingest.CountPages()`,
+and creates `{blob_path}.chunks.json`. It does not call Azure OpenAI, Azure AI Search, or
+`ingest.Run()` until a later chunk request.
 
-**Path synthesis rules (upload metadata → local path):**
+**Blob path synthesis rules (upload metadata → blob path):**
 
-| source_type | module | year | Synthesized path |
+| source_type | module | year | Blob path |
 |---|---|---|---|
-| `banner` | `General` | `2026` | `data/docs/banner/general/releases/2026/<filename>` |
-| `banner` | `Finance` | `2026` | `data/docs/banner/finance/releases/2026/<filename>` |
-| `banner_user_guide` | `General` | — | `data/docs/banner/general/use/<filename>` |
-| `banner_user_guide` | `Student` | — | `data/docs/banner/student/use/<filename>` |
-| `banner_user_guide` | `Finance` | — | `data/docs/banner/finance/use/<filename>` |
-| `sop` | — | — | `data/docs/sop/<filename>` |
+| `banner` | `General` | `2026` | `banner/general/releases/2026/<filename>` |
+| `banner` | `Finance` | `2026` | `banner/finance/releases/2026/<filename>` |
+| `banner_user_guide` | `General` | — | `banner/general/use/<filename>` |
+| `banner_user_guide` | `Student` | — | `banner/student/use/<filename>` |
+| `banner_user_guide` | `Finance` | — | `banner/finance/use/<filename>` |
 
-Once the file is at the synthesized path, `parseMetadata()` extracts module, version, and year
-exactly as it would for a manually placed file — the upload path is transparent to the pipeline.
+The sidecar blob path is always `{blob_path}.chunks.json`.
 
 ---
 
 ### `POST /banner/upload` — multipart form upload
 
-Accepts a single file with explicit metadata. The server synthesizes the destination path,
-writes the file, then runs the ingest pipeline on that single file.
+Accepts a single PDF with explicit metadata. The server synthesizes the Blob path, writes the
+PDF, counts pages, and creates the sidecar. It does not chunk.
 
 **Request (multipart/form-data):**
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `file` | binary | Yes | PDF, DOCX, or TXT file |
-| `source_type` | string | Yes | `banner` \| `banner_user_guide` \| `sop` |
-| `module` | string | Yes (banner/user_guide) | `General`, `Finance`, `Student`, etc. |
-| `version` | string | No | e.g. `9.3.37.2` — included in filename if provided |
-| `year` | string | No | e.g. `2026` — added to path for release notes |
-| `pages_per_batch` | int | No | Default 10 — tune for large PDFs |
-| `store_in_blob` | bool | No | If true, also uploads to Azure Blob Storage (requires `AZURE_STORAGE_CONNECTION_STRING`) |
+| `file` | binary | Yes | PDF file |
+| `source_type` | string | Yes | `banner` \| `banner_user_guide` |
+| `module` | string | Yes | `General`, `Finance`, `Student`, etc. |
+| `version` | string | No | e.g. `9.3.37.2` — required for release notes |
+| `year` | string | No | e.g. `2026` — required for release notes |
 
 **Response:**
 ```json
 {
-  "status": "success",
-  "documents_processed": 1,
-  "chunks_indexed": 70,
-  "stored_path": "data/docs/banner/finance/releases/2026/Banner_Finance_9.3.22_ReleaseNotes.pdf",
-  "blob_stored": false,
-  "message": "Ingested 1 documents (70 chunks) into \"banner-index\""
+  "upload_id": "a3f8c1d2-...",
+  "blob_path": "banner/finance/releases/2026/Banner_Finance_9.3.22.pdf",
+  "total_pages": 120,
+  "status": "pending",
+  "chunking_pattern": "none",
+  "gap_count": 1,
+  "gap_summary": "1 gap: pages 1-120 (120 pages total unchunked)",
+  "message": "PDF uploaded. No pages chunked yet. Call POST /banner/upload/chunk to begin."
 }
 ```
 
 **Validation rules:**
-- `source_type` must be one of: `banner`, `banner_user_guide`, `sop`
-- `module` required for `banner` and `banner_user_guide` source types
+- `source_type` must be one of: `banner`, `banner_user_guide`
+- `source_type=sop` is rejected in Phase U
+- `module` is required
 - `module` must match a known module name (case-insensitive)
 - File size limit: 100 MB (configurable via `MAX_UPLOAD_SIZE_MB` env var)
-- Accepted extensions: `.pdf`, `.docx`, `.txt`, `.md`
-- SOP files: must be `.docx`; filename must satisfy SOP naming convention, or a `sop_number`
-  and `sop_title` field can be provided to synthesize a conforming filename
+- Accepted extension: `.pdf`
+- DOCX, TXT, and Markdown upload are rejected before Blob write or sidecar creation
 
 **Example curl:**
 ```bash
@@ -585,19 +585,10 @@ curl -s -X POST http://localhost:8000/banner/upload \
   -F "module=Finance" | jq .
 ```
 
-**Upload a SOP:**
-```bash
-curl -s -X POST http://localhost:8000/banner/upload \
-  -F "file=@SOP154 - Procedure - Start, Stop Axiom.docx" \
-  -F "source_type=sop" | jq .
-```
+### `POST /banner/upload/from-url` — URL-based upload
 
----
-
-### `POST /banner/upload/from-url` — URL-based ingest
-
-Provide a URL and metadata. The server downloads the file, synthesizes the local path, and ingests.
-Useful for Ellucian Customer Center (ECC) download links in automated pipelines.
+Provide a URL and metadata. The server downloads the PDF, writes it to Blob Storage, and creates
+the sidecar. Useful for Ellucian Customer Center (ECC) download links in automated pipelines.
 
 **Request (application/json):**
 ```json
@@ -606,8 +597,7 @@ Useful for Ellucian Customer Center (ECC) download links in automated pipelines.
   "source_type": "banner",
   "module": "Finance",
   "version": "9.3.22",
-  "year": "2026",
-  "store_in_blob": false
+  "year": "2026"
 }
 ```
 
@@ -620,7 +610,7 @@ Useful for Ellucian Customer Center (ECC) download links in automated pipelines.
   - Set to `*` to allow any HTTPS URL (not recommended in production)
 - Download timeout: 60 seconds
 - File size limit: 100 MB (same as multipart upload)
-- File extension validated after download (must be `.pdf`, `.docx`, `.txt`, `.md`)
+- File extension validated after download (must be `.pdf`)
 
 **Example curl:**
 ```bash
@@ -639,24 +629,22 @@ curl -s -X POST http://localhost:8000/banner/upload/from-url \
 
 ### Azure Blob Storage as a durable PDF store
 
-The existing `POST /banner/blob/sync` downloads from Blob and ingests. Phase M extends this
-pattern: when `store_in_blob=true` on an upload, the server mirrors the synthesized local path
-in the Blob container. This makes Azure Blob the canonical, durable store.
+The existing `POST /banner/blob/sync` downloads from Blob and ingests. Phase U upload stores
+PDFs in Blob as the canonical, durable store and stores chunking state in the adjacent sidecar.
 
 **Blob path mirrors the local path:**
 ```
-Blob container:  banner/finance/releases/2026/Banner_Finance_9.3.22_ReleaseNotes.pdf
-Local path:      data/docs/banner/finance/releases/2026/Banner_Finance_9.3.22_ReleaseNotes.pdf
+Blob container:  banner/finance/releases/2026/Banner_Finance_9.3.22.pdf
+Sidecar:         banner/finance/releases/2026/Banner_Finance_9.3.22.pdf.chunks.json
 ```
 
-With this layout, `POST /banner/blob/sync` with `prefix=banner/finance/releases` will download
-and re-ingest exactly the right files — including the uploaded PDFs. The local filesystem is
-effectively a warm cache of Blob Storage.
+With this layout, upload, chunk, status, list, and delete can all resolve state from Blob
+without relying on local filesystem persistence.
 
 **Why this matters for cloud deployments:**
 - Container restarts lose the local `data/docs/` state
 - With Blob as source of truth, `POST /banner/blob/sync` on startup rebuilds the index from Blob
-- Future automation: trigger blob sync on container start or via a scheduled cron
+- The sidecar persists across restarts — partial chunking state is never lost
 
 **Env vars required for Blob storage:**
 ```env
@@ -672,19 +660,19 @@ AZURE_STORAGE_BLOB_PREFIX=banner/          # optional prefix within the containe
 Before uploading a PDF:
 
 - [ ] **PDF is text-based** (can select text in viewer) — not scanned
-- [ ] **source_type is correct**: `banner` for release notes, `banner_user_guide` for how-to guides, `sop` for DOCX procedures
+- [ ] **source_type is correct**: `banner` for release notes, `banner_user_guide` for how-to guides
 - [ ] **module is a recognized name** for banner/user_guide: General, Finance, Student, HR, etc.
 - [ ] **For release notes**: provide `version` (e.g. `9.3.22`) and `year` (e.g. `2026`)
 - [ ] **For user guides**: do NOT provide `version` or `year` — user guides are not versioned
-- [ ] **For SOPs**: DOCX file only; filename follows `SOP<n> - <title>.docx` or provide `sop_number` + `sop_title`
+- [ ] **PDF-only for Phase U**: SOP, DOCX, TXT, and Markdown upload are deferred
 - [ ] **File size**: PDF is under 100 MB (user guides rarely exceed 50 MB)
-- [ ] **`store_in_blob`**: set `true` in production so the PDF persists across container restarts
+- [ ] **Blob storage env**: `AZURE_STORAGE_CONNECTION_STRING` and `AZURE_STORAGE_CONTAINER_NAME` are configured
 
 ---
 
 ### Existing Blob sync endpoints (for reference)
 
-These endpoints already exist and don't require Phase M:
+These endpoints already exist and are separate from Phase U upload:
 
 **List what's in Blob Storage:**
 ```bash
@@ -705,4 +693,5 @@ curl -s -X POST http://localhost:8000/banner/blob/sync \
 of the downloaded folder.
 
 **Limitation of current blob sync:** It always ingests the entire `data/docs/banner` folder
-after download. Phase M's upload endpoint is more targeted — it ingests only the uploaded file.
+after download. Phase U upload/chunk tracks one uploaded PDF and its page ranges through the
+sidecar.

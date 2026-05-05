@@ -182,12 +182,12 @@ Acceptance criteria:
 
 ## Phase U.4 - Count Pages and Upload Validation
 
-- [ ] Add `ingest.CountPages(filePath string) (int, error)` for PDFs.
-- [ ] Validate Phase U source types, module, version, year, PDF extension, and size limits.
-- [ ] Reject `source_type=sop`, `.docx`, `.txt`, and `.md` before any Blob write or sidecar
+- [x] Add `ingest.CountPages(filePath string) (int, error)` for PDFs.
+- [x] Validate Phase U source types, module, version, year, PDF extension, and size limits.
+- [x] Reject `source_type=sop`, `.docx`, `.txt`, and `.md` before any Blob write or sidecar
       creation.
-- [ ] Synthesize Blob paths from metadata using the `/ingest` path convention.
-- [ ] Keep user guides unversioned and release notes year-aware.
+- [x] Synthesize Blob paths from metadata using the `/ingest` path convention.
+- [x] Keep user guides unversioned and release notes year-aware.
 
 Prompt for implementer:
 
@@ -199,34 +199,34 @@ testdata if available. Do not add upload HTTP handlers yet.
 
 Red tests:
 
-- [ ] `TestSynthesizeBlobPath_BannerReleaseWithYear`
-- [ ] `TestSynthesizeBlobPath_BannerUserGuide`
-- [ ] `TestValidateUploadMetadata_RejectsMissingSourceType`
-- [ ] `TestValidateUploadMetadata_RejectsMissingModuleForBanner`
-- [ ] `TestValidateUploadMetadata_RejectsVersionOrYearForUserGuide`
-- [ ] `TestValidateUploadMetadata_RejectsUnknownModule`
-- [ ] `TestValidateUploadMetadata_RejectsUnsupportedExtension`
-- [ ] `TestValidateUploadMetadata_RejectsSOPUploadInPhaseU`
-- [ ] `TestValidateUploadMetadata_RejectsNonPDFUploadExtension`
-- [ ] `TestCountPages_ReturnsPDFPageCount`
+- [x] `TestSynthesizeBlobPath_BannerReleaseWithYear`
+- [x] `TestSynthesizeBlobPath_BannerUserGuide`
+- [x] `TestValidateUploadMetadata_RejectsMissingSourceType`
+- [x] `TestValidateUploadMetadata_RejectsMissingModuleForBanner`
+- [x] `TestValidateUploadMetadata_RejectsVersionOrYearForUserGuide`
+- [x] `TestValidateUploadMetadata_RejectsUnknownModule`
+- [x] `TestValidateUploadMetadata_RejectsUnsupportedExtension`
+- [x] `TestValidateUploadMetadata_RejectsSOPUploadInPhaseU`
+- [x] `TestValidateUploadMetadata_RejectsNonPDFUploadExtension`
+- [x] `TestCountPages_ReturnsPDFPageCount`
 
 Green tasks:
 
-- [ ] Add Blob path synthesis helper.
-- [ ] Add validation helper with typed errors or stable error codes for handlers.
-- [ ] Add `CountPages` using the existing PDF reader.
-- [ ] Add `MAX_UPLOAD_SIZE_MB` config with default `100`.
+- [x] Add Blob path synthesis helper.
+- [x] Add validation helper with typed errors or stable error codes for handlers.
+- [x] Add `CountPages` using the existing PDF reader.
+- [x] Add `MAX_UPLOAD_SIZE_MB` config with default `100`.
 
 Refactor tasks:
 
-- [ ] Reuse existing module normalization where possible.
-- [ ] Keep operator-facing validation messages stable for tests and docs.
+- [x] Reuse existing module normalization where possible.
+- [x] Keep operator-facing validation messages stable for tests and docs.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/upload/... -v` passes.
-- [ ] `go test ./internal/ingest/... -run CountPages -v` passes.
-- [ ] `config.Config` documents `MAX_UPLOAD_SIZE_MB`.
+- [x] `go test ./internal/upload/... -v` passes.
+- [x] `go test ./internal/ingest/... -run CountPages -v` passes.
+- [x] `config.Config` documents `MAX_UPLOAD_SIZE_MB`.
 
 ## Phase U.5 - Multipart Upload Endpoint
 

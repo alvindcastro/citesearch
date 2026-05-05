@@ -497,7 +497,7 @@ The folder-based ingest (`POST /banner/ingest`) requires the operator to place f
 server's local `data/docs/` directory. In cloud deployments (Fly.io, remote Docker) this is
 impractical — there is no SSH access and no persistent local filesystem.
 
-Phase M introduces upload paths that do not require filesystem access. Uploading and chunking
+Phase U introduces upload paths that do not require filesystem access. Uploading and chunking
 are **separate steps** — uploading stores the PDF in Blob Storage and creates a sidecar
 tracking file, but does not chunk. Chunking is a subsequent call that can be done in full or
 in stages across any page ranges.
@@ -506,12 +506,12 @@ in stages across any page ranges.
 |---|---|---|
 | Folder-based (existing) | `POST /banner/ingest` | Local dev, bulk initial ingest from disk |
 | Azure Blob sync (existing) | `POST /banner/blob/sync` | Production, pre-populated Blob container |
-| Upload — multipart (Phase M.2) | `POST /banner/upload` | Ad-hoc file upload to Blob. Creates sidecar. Does not chunk. |
-| Upload — from URL (Phase M.2) | `POST /banner/upload/from-url` | Ellucian ECC links, automation. Downloads to Blob. Creates sidecar. Does not chunk. |
-| Chunk (Phase M.3) | `POST /banner/upload/chunk` | Chunk a page range of any uploaded PDF. Can be called multiple times with non-overlapping ranges in any order. |
-| Status (Phase M.3) | `GET /banner/upload/{id}/status` | Read sidecar: chunked ranges, unchunked ranges, chunking_pattern, gap_summary. |
-| List (Phase M.3) | `GET /banner/upload` | List all tracked uploads with chunking status and gap summaries. |
-| Delete (Phase M.3) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
+| Upload — multipart (Phase U.5) | `POST /banner/upload` | Ad-hoc file upload to Blob. Creates sidecar. Does not chunk. |
+| Upload — from URL (Phase U.6) | `POST /banner/upload/from-url` | Ellucian ECC links, automation. Downloads to Blob. Creates sidecar. Does not chunk. |
+| Chunk (Phase U.7) | `POST /banner/upload/chunk` | Chunk a page range of any uploaded PDF. Can be called multiple times with non-overlapping ranges in any order. |
+| Status (Phase U.8) | `GET /banner/upload/{id}/status` | Read sidecar: chunked ranges, unchunked ranges, chunking_pattern, gap_summary. |
+| List (Phase U.8) | `GET /banner/upload` | List all tracked uploads with chunking status and gap summaries. |
+| Delete (Phase U.9) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
 
 ---
 
@@ -695,7 +695,7 @@ Read the current sidecar state. Does not modify anything.
 
 ### Azure Blob Storage as a durable PDF store
 
-The existing `POST /banner/blob/sync` downloads from Blob and ingests. Phase M extends this
+The existing `POST /banner/blob/sync` downloads from Blob and ingests. Phase U extends this
 pattern: uploaded PDFs are stored in Blob as the canonical, durable store. The sidecar
 lives alongside the PDF in the same container.
 
@@ -729,7 +729,7 @@ AZURE_STORAGE_BLOB_PREFIX=banner/          # optional prefix within the containe
 
 ### Existing Blob sync endpoints (for reference)
 
-These endpoints already exist and don't require Phase M:
+These endpoints already exist and are separate from Phase U upload:
 
 **List what's in Blob Storage:**
 ```bash
@@ -753,7 +753,7 @@ of the downloaded folder.
 
 ## Partial Chunking and Sidecar State
 
-A PDF uploaded via Phase M can be chunked in multiple rounds across any page ranges, in any
+A PDF uploaded via Phase U can be chunked in multiple rounds across any page ranges, in any
 order. The sidecar JSON blob tracks exactly which pages have been chunked.
 
 ### Sidecar location

@@ -11,7 +11,7 @@ Covers *why* decisions were made, *how* things work internally, and *when* thing
 2. [Why Go?](#why-go)
 3. [Package Responsibilities](#package-responsibilities)
 4. [Data Flow: Ingestion Pipeline](#data-flow-ingestion-pipeline)
-   - [Phase M: Upload/Chunk entry points](#phase-m-entry-points-uploadchunk-path)
+   - [Phase U: Upload/Chunk entry points](#phase-u-entry-points-uploadchunk-path)
 5. [Data Flow: RAG Query Pipeline](#data-flow-rag-query-pipeline)
    - [Auto-routing mode](#auto-routing-mode)
    - [Module-scoped routing](#module-scoped-routing)
@@ -33,7 +33,7 @@ Covers *why* decisions were made, *how* things work internally, and *when* thing
     - [Add a New Summarization Topic](#add-a-new-summarization-topic)
     - [Add Authentication](#add-authentication)
     - [Add Streaming Responses](#add-streaming-responses)
-    - [Add the Phase M Upload/Chunk Handler](#add-the-phase-m-uploadchunk-handler)
+    - [Add the Phase U Upload/Chunk Handler](#add-the-phase-u-uploadchunk-handler)
 19. [Testing Gaps](#testing-gaps)
 20. [Performance Notes](#performance-notes)
 
@@ -767,9 +767,10 @@ The upload/chunk path is a separate handler layer that wraps the existing `inges
 No changes to the ingest pipeline are required.
 
 1. Create `internal/upload/` package with:
-   - `types.go`, `service.go`, `range_math.go` — `SidecarState`, `ReadSidecar()`,
-     `WriteSidecar()`, `SidecarPath()`, `ListUploads()`, `ComputeUnchunkedRanges()`,
-     `CheckOverlap()`, `ComputePattern()`, `GapSummary()`
+   - `types.go`, `service.go`, `range_math.go`, `metadata.go` — `SidecarState`,
+     `ReadSidecar()`, `WriteSidecar()`, `SidecarPath()`, `ListUploads()`,
+     `ComputeUnchunkedRanges()`, `CheckOverlap()`, `ComputePattern()`,
+     `GapSummary()`, `ValidateUploadMetadata()`, `SynthesizeBlobPath()`
    - `handler.go` — `UploadPDF()`, `UploadFromURL()`, `ChunkPages()`, `ChunkingStatus()`,
      `ListUploads()`, `DeleteUpload()`
 

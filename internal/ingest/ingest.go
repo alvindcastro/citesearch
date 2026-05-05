@@ -262,6 +262,21 @@ func inspectPDF(filePath string) (pages int, textPages int, err error) {
 	return pages, textPages, nil
 }
 
+// CountPages returns the number of pages in a PDF without extracting or chunking text.
+func CountPages(filePath string) (int, error) {
+	if strings.ToLower(filepath.Ext(filePath)) != ".pdf" {
+		return 0, fmt.Errorf("unsupported file type for page count: %s", filepath.Ext(filePath))
+	}
+
+	f, r, err := pdf.Open(filePath)
+	if err != nil {
+		return 0, fmt.Errorf("open pdf: %w", err)
+	}
+	defer f.Close()
+
+	return r.NumPage(), nil
+}
+
 func buildDryRunWarnings(filePath, sourceType string, meta docMetadata, pages, textPages int) []string {
 	var warnings []string
 
