@@ -96,10 +96,10 @@ flow.
 | `blob_path` | Upload | Blob path of the PDF. Unique — one PDF per path. |
 | `upload_id` | Upload | UUID assigned at upload time. Use this to reference the PDF in subsequent calls. |
 | `uploaded_at` | Upload | ISO 8601 timestamp of the upload. |
-| `source_type` | Upload | `banner`, `banner_user_guide`, or `sop`. |
+| `source_type` | Upload | `banner` or `banner_user_guide`. |
 | `module` | Upload | Banner module name (e.g. `Finance`, `Student`, `General`). |
-| `version` | Upload | Version string for release notes (e.g. `9.3.22`). Empty for user guides and SOPs. |
-| `year` | Upload | Year for release notes (e.g. `2026`). Empty for user guides and SOPs. |
+| `version` | Upload | Version string for release notes (e.g. `9.3.22`). Empty for user guides. |
+| `year` | Upload | Year for release notes (e.g. `2026`). Empty for user guides. |
 | `total_pages` | Upload | Total page count of the PDF, extracted immediately on upload. |
 | `chunked_ranges` | Chunk | Sorted list of completed page ranges with timestamps and Azure Search chunk IDs. |
 | `unchunked_ranges` | Chunk | Full complement of `chunked_ranges` against `[1, total_pages]`. Always recomputed on write. Never trusted from caller. |
@@ -126,9 +126,9 @@ flow.
 - The sidecar is written atomically after each range completes. When chunk-all-remaining
   processes multiple gaps and fails mid-way, the sidecar reflects only the gaps that
   completed — no partial-gap state.
-- `chunk_ids` within each range are the deterministic Azure Search document IDs
-  (`MD5(blob_path + page + index)`). They can be used to delete specific page ranges from
-  the index if needed.
+- `chunk_ids` within each range are reserved for deterministic Azure Search document IDs.
+  They become authoritative only after the chunk path can reliably return or persist them.
+  Until then, exact index purge remains deferred.
 
 ---
 
@@ -143,7 +143,6 @@ existing ingestion pipeline. The blob path mirrors the local `data/docs/` folder
 | `banner` | `General` | `2026` | `banner/general/releases/2026/<filename>` |
 | `banner_user_guide` | `Student` | — | `banner/student/use/<filename>` |
 | `banner_user_guide` | `Finance` | — | `banner/finance/use/<filename>` |
-| `sop` | — | — | `sop/<filename>` |
 
 The sidecar blob path is always `{blob_path}.chunks.json`.
 
@@ -164,8 +163,8 @@ Upload a PDF to Blob Storage. Creates the sidecar. Does not chunk.
 | Field | Required | Description |
 |---|---|---|
 | `file` | Yes | The PDF file. |
-| `source_type` | Yes | `banner`, `banner_user_guide`, or `sop`. |
-| `module` | Yes (banner/user_guide) | `General`, `Finance`, `Student`, etc. |
+| `source_type` | Yes | `banner` or `banner_user_guide`. |
+| `module` | Yes | `General`, `Finance`, `Student`, etc. |
 | `version` | No | e.g. `9.3.22` — release notes only. |
 | `year` | No | e.g. `2026` — release notes only. |
 
@@ -216,8 +215,8 @@ unchanged. Does not chunk.
 | Field | Required | Description |
 |---|---|---|
 | `url` | Yes | HTTPS URL to the PDF. Must be on the configured allowlist. |
-| `source_type` | Yes | `banner`, `banner_user_guide`, or `sop`. |
-| `module` | Yes (banner/user_guide) | `General`, `Finance`, `Student`, etc. |
+| `source_type` | Yes | `banner` or `banner_user_guide`. |
+| `module` | Yes | `General`, `Finance`, `Student`, etc. |
 | `version` | No | e.g. `9.3.22` — release notes only. |
 | `year` | No | e.g. `2026` — release notes only. |
 
@@ -229,7 +228,7 @@ unchanged. Does not chunk.
   not recommended in production.
 - Download timeout: 60 seconds.
 - File size limit: same as multipart upload (`MAX_UPLOAD_SIZE_MB`, default 100 MB).
-- File extension validated after download — must be `.pdf`, `.docx`, `.txt`, or `.md`.
+- File extension validated after download — must be `.pdf`.
 
 **Response:** identical shape to `POST /banner/upload`. `uploaded_at` reflects when the
 download completed. If the download fails, no sidecar is created.
@@ -386,7 +385,8 @@ List all tracked uploads. Returns sidecar summaries for all documents.
 ### `DELETE /banner/upload/{upload_id}`
 
 Remove the PDF blob and its sidecar. Does not remove chunks from the Azure Search index.
-Pass `?purge_index=true` to also remove all indexed chunks for this document.
+Exact index purge is deferred until uploaded page ranges reliably persist the chunk IDs needed
+for tested search deletion.
 
 **Response:**
 
@@ -592,7 +592,7 @@ signal for this condition.
 
 If a chunk call fails mid-way (network timeout, Azure rate limit, container restart), the sidecar
 reflects only the pages successfully embedded before failure. No pages are double-indexed —
-chunk IDs are deterministic (`MD5(blob_path + page + index)`).
+chunk IDs are deterministic in the current ingest pipeline.
 
 ```bash
 # Check what completed
@@ -656,10 +656,11 @@ Azure Search has no concept of a complete document — each chunk is independent
 ## Pre-Upload Checklist
 
 - [ ] PDF is text-based (you can select text in a viewer) — not a scanned image
-- [ ] `source_type` is correct: `banner` for release notes, `banner_user_guide` for how-to guides, `sop` for procedure DOCX files
+- [ ] `source_type` is correct: `banner` for release notes, `banner_user_guide` for how-to guides
 - [ ] `module` is a recognized name: General, Finance, Student, HR, Financial Aid, Advancement, Payroll, Accounts Receivable, Position Control
 - [ ] Release notes only: `version` (e.g. `9.3.22`) and `year` (e.g. `2026`) are provided
-- [ ] User guides and SOPs: do NOT provide `version` or `year`
+- [ ] User guides: do NOT provide `version` or `year`
+- [ ] PDF-only for Phase U: SOP, DOCX, TXT, and Markdown upload are deferred
 - [ ] File is under 100 MB
 - [ ] No existing PDF at the same blob path (check `GET /banner/upload` list first)
 - [ ] Azure Blob Storage env vars are set: `AZURE_STORAGE_CONNECTION_STRING`, `AZURE_STORAGE_CONTAINER_NAME`

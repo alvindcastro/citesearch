@@ -511,7 +511,7 @@ in stages across any page ranges.
 | Chunk (Phase M.3) | `POST /banner/upload/chunk` | Chunk a page range of any uploaded PDF. Can be called multiple times with non-overlapping ranges in any order. |
 | Status (Phase M.3) | `GET /banner/upload/{id}/status` | Read sidecar: chunked ranges, unchunked ranges, chunking_pattern, gap_summary. |
 | List (Phase M.3) | `GET /banner/upload` | List all tracked uploads with chunking status and gap summaries. |
-| Delete (Phase M.3) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Pass `?purge_index=true` to also remove indexed chunks. |
+| Delete (Phase M.3) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
 
 ---
 
@@ -532,7 +532,6 @@ multiple rounds without re-uploading.
 | `banner_user_guide` | `General` | — | `banner/general/use/<filename>` |
 | `banner_user_guide` | `Student` | — | `banner/student/use/<filename>` |
 | `banner_user_guide` | `Finance` | — | `banner/finance/use/<filename>` |
-| `sop` | — | — | `sop/<filename>` |
 
 The sidecar blob path is always `{blob_path}.chunks.json`. Both upload endpoints create it.
 
@@ -546,9 +545,9 @@ Writes the PDF to Blob Storage and creates the sidecar. Does not chunk.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `file` | binary | Yes | PDF, DOCX, or TXT file |
-| `source_type` | string | Yes | `banner` \| `banner_user_guide` \| `sop` |
-| `module` | string | Yes (banner/user_guide) | `General`, `Finance`, `Student`, etc. |
+| `file` | binary | Yes | PDF file |
+| `source_type` | string | Yes | `banner` \| `banner_user_guide` |
+| `module` | string | Yes | `General`, `Finance`, `Student`, etc. |
 | `version` | string | No | e.g. `9.3.22` — release notes only |
 | `year` | string | No | e.g. `2026` — release notes only |
 
@@ -567,13 +566,12 @@ Writes the PDF to Blob Storage and creates the sidecar. Does not chunk.
 ```
 
 **Validation rules:**
-- `source_type` must be one of: `banner`, `banner_user_guide`, `sop`
-- `module` required for `banner` and `banner_user_guide` source types
+- `source_type` must be one of: `banner`, `banner_user_guide`
+- `module` is required
 - `module` must match a known module name (case-insensitive)
 - File size limit: 100 MB (configurable via `MAX_UPLOAD_SIZE_MB` env var)
-- Accepted extensions: `.pdf`, `.docx`, `.txt`, `.md`
-- SOP files: must be `.docx`; filename must satisfy SOP naming convention, or provide
-  `sop_number` and `sop_title` to synthesize a conforming filename
+- Accepted extension: `.pdf`
+- SOP, DOCX, TXT, and Markdown upload are out of scope for Phase U
 - Returns 409 if a PDF already exists at the synthesized blob path
 
 **Example curl:**
@@ -615,7 +613,7 @@ completed. If the download fails, no sidecar is created.
   - Set to `*` to allow any HTTPS URL (not recommended in production)
 - Download timeout: 60 seconds
 - File size limit: 100 MB (same as multipart upload)
-- File extension validated after download (must be `.pdf`, `.docx`, `.txt`, `.md`)
+- File extension validated after download (must be `.pdf`)
 
 **Example curl:**
 ```bash
@@ -718,11 +716,11 @@ AZURE_STORAGE_BLOB_PREFIX=banner/          # optional prefix within the containe
 ### Upload workflow pre-upload checklist
 
 - [ ] **PDF is text-based** (can select text in viewer) — not scanned
-- [ ] **source_type is correct**: `banner` for release notes, `banner_user_guide` for how-to guides, `sop` for DOCX procedures
+- [ ] **source_type is correct**: `banner` for release notes, `banner_user_guide` for how-to guides
 - [ ] **module is a recognized name** for banner/user_guide: General, Finance, Student, HR, etc.
 - [ ] **For release notes**: provide `version` (e.g. `9.3.22`) and `year` (e.g. `2026`)
 - [ ] **For user guides**: do NOT provide `version` or `year` — user guides are not versioned
-- [ ] **For SOPs**: DOCX file only; filename follows `SOP<n> - <title>.docx` or provide `sop_number` + `sop_title`
+- [ ] **PDF only**: SOP, DOCX, TXT, and Markdown upload are deferred until after Phase U
 - [ ] **File size**: PDF is under 100 MB
 - [ ] **No duplicate**: no existing PDF at this blob path (`GET /banner/upload` to check)
 - [ ] **(from-url only)**: URL is HTTPS and hostname is on `UPLOAD_URL_ALLOWLIST`

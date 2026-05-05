@@ -452,7 +452,7 @@ IDs = different documents in the index).
 **Why not sequential integers?** Race conditions if parallel ingestion is ever added. Also fragile
 across restarts.
 
-**Solution:** `MD5(filename + "|" + pageNumber + "|" + chunkIndex)`
+**Solution:** `MD5(filename + "::p" + pageNumber + "::c" + chunkIndex)`
 
 This means:
 - Same file + same page + same chunk index = same ID → safe re-ingest (updates in place)
@@ -674,7 +674,7 @@ Blob Storage. There is no database, no queue, no job tracker. This means:
   fails during gap 2, gap 1 is durably recorded and gap 3 is still pending. Gap 2 may be
   partially indexed in Azure Search (chunks uploaded before the failure) with no corresponding
   sidecar record. Reissuing the call re-chunks gap 2 from the start; deterministic chunk IDs
-  (`MD5(blob_path + page + index)`) prevent duplicates via Azure Search's merge-or-upload
+  prevent duplicates via Azure Search's merge-or-upload
   semantics.
 
 ### 9. `ingest.CountPages()` Is Required for Phase M Upload

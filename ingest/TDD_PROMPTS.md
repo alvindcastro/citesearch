@@ -7,6 +7,7 @@ Canonical source for this plan:
 - [INGEST_FLOW.md](INGEST_FLOW.md)
 - [INGEST.md](INGEST.md)
 - [PDF_UPLOAD_FLOW.md](PDF_UPLOAD_FLOW.md)
+- [UPLOAD_SPEC_DECISION.md](UPLOAD_SPEC_DECISION.md)
 - [INTERNALS.md](INTERNALS.md)
 
 Important design note: the `/ingest` docs describe the newer decoupled upload model. Uploading
@@ -29,13 +30,15 @@ Blob-plus-sidecar model.
 
 ## Phase U.0 - Reconcile Upload Spec Before Coding
 
-- [ ] Confirm that `/ingest/PDF_UPLOAD_FLOW.md` is the canonical behavior for upload, chunk, status,
+- [x] Confirm that `/ingest/PDF_UPLOAD_FLOW.md` is the canonical behavior for upload, chunk, status,
       list, and delete.
-- [ ] Confirm that upload endpoints do not call Azure OpenAI or Azure AI Search.
-- [ ] Confirm that chunk endpoints are the only upload-flow endpoints that call the ingest pipeline.
-- [ ] Confirm whether `DOCX`, `TXT`, and `MD` are in scope for upload now or whether Phase U should
+- [x] Confirm that upload endpoints do not call Azure OpenAI or Azure AI Search.
+- [x] Confirm that chunk endpoints are the only upload-flow endpoints that call the ingest pipeline.
+- [x] Confirm whether `DOCX`, `TXT`, and `MD` are in scope for upload now or whether Phase U should
       start with PDF only despite older tables mentioning multiple extensions.
-- [ ] Confirm whether index purge on delete must be implemented in the first delete phase or deferred.
+      Decision: Phase U upload supports PDFs only. DOCX, TXT, MD, and SOP uploads are out of
+      scope and must be rejected.
+- [x] Confirm whether index purge on delete must be implemented in the first delete phase or deferred.
 
 Prompt for implementer:
 
@@ -48,9 +51,10 @@ prompt docs if needed.
 
 Acceptance criteria:
 
-- [ ] The canonical upload model is stated in writing.
-- [ ] Any conflict with `PLAN.md` is called out before implementation starts.
-- [ ] The next implementation phase can proceed without guessing about upload-vs-chunk behavior.
+- [x] The canonical upload model is stated in writing.
+- [x] Any conflict with `PLAN.md` is called out before implementation starts.
+- [x] The next implementation phase can proceed without guessing about upload-vs-chunk behavior.
+- [x] Downstream implementation phases reflect PDF-only scope.
 
 ## Phase U.1 - Test Seams and Upload Package Skeleton
 
@@ -178,7 +182,9 @@ Acceptance criteria:
 ## Phase U.4 - Count Pages and Upload Validation
 
 - [ ] Add `ingest.CountPages(filePath string) (int, error)` for PDFs.
-- [ ] Validate `source_type`, `module`, `version`, `year`, extension, and size limits.
+- [ ] Validate Phase U source types, module, version, year, PDF extension, and size limits.
+- [ ] Reject `source_type=sop`, `.docx`, `.txt`, and `.md` before any Blob write or sidecar
+      creation.
 - [ ] Synthesize Blob paths from metadata using the `/ingest` path convention.
 - [ ] Keep user guides unversioned and release notes year-aware.
 
@@ -194,12 +200,13 @@ Red tests:
 
 - [ ] `TestSynthesizeBlobPath_BannerReleaseWithYear`
 - [ ] `TestSynthesizeBlobPath_BannerUserGuide`
-- [ ] `TestSynthesizeBlobPath_SOP`
 - [ ] `TestValidateUploadMetadata_RejectsMissingSourceType`
 - [ ] `TestValidateUploadMetadata_RejectsMissingModuleForBanner`
 - [ ] `TestValidateUploadMetadata_RejectsVersionOrYearForUserGuide`
 - [ ] `TestValidateUploadMetadata_RejectsUnknownModule`
 - [ ] `TestValidateUploadMetadata_RejectsUnsupportedExtension`
+- [ ] `TestValidateUploadMetadata_RejectsSOPUploadInPhaseU`
+- [ ] `TestValidateUploadMetadata_RejectsNonPDFUploadExtension`
 - [ ] `TestCountPages_ReturnsPDFPageCount`
 
 Green tasks:
@@ -233,7 +240,8 @@ Prompt for implementer:
 Strict TDD. Implement POST /banner/upload as a multipart endpoint. Tests must prove that a valid
 upload writes the blob, counts pages, creates the sidecar, and does not call the ingest runner.
 Use fakes for BlobStore, PageCounter, IDGenerator, and Clock. Wire the Gin route only after handler
-tests fail for the missing route.
+tests fail for the missing route. Phase U upload is PDF-only; tests must prove non-PDF files and
+`source_type=sop` are rejected before any Blob write or sidecar creation.
 ```
 
 Red tests:
@@ -241,6 +249,7 @@ Red tests:
 - [ ] `TestBannerUpload_MissingSourceType_Returns400`
 - [ ] `TestBannerUpload_MissingModuleForBanner_Returns400`
 - [ ] `TestBannerUpload_UnsupportedExtension_Returns400`
+- [ ] `TestBannerUpload_SOPSourceType_Returns400`
 - [ ] `TestBannerUpload_FileTooLarge_Returns413`
 - [ ] `TestBannerUpload_DuplicateBlob_Returns409`
 - [ ] `TestBannerUpload_CreatesBlobAndInitialSidecar`
@@ -279,7 +288,8 @@ Prompt for implementer:
 ```text
 Strict TDD. Implement URL-based upload with SSRF protection. Start with table-driven tests for URL
 allowlist behavior, then handler tests using httptest servers and a fake downloader where possible.
-No Azure or public network calls are allowed in unit tests.
+No Azure or public network calls are allowed in unit tests. Phase U upload is PDF-only; tests must
+prove non-PDF downloads and `source_type=sop` are rejected before any Blob write or sidecar creation.
 ```
 
 Red tests:
@@ -292,6 +302,8 @@ Red tests:
 - [ ] `TestBannerUploadFromURL_Remote5xxReturns502`
 - [ ] `TestBannerUploadFromURL_TimeoutReturns408`
 - [ ] `TestBannerUploadFromURL_TooLargeReturns413`
+- [ ] `TestBannerUploadFromURL_NonPDFDownloadReturns400`
+- [ ] `TestBannerUploadFromURL_SOPSourceTypeReturns400`
 - [ ] `TestBannerUploadFromURL_CreatesBlobAndSidecar`
 - [ ] `TestBannerUploadFromURL_DoesNotCallIngest`
 
@@ -441,30 +453,29 @@ Acceptance criteria:
 
 - [ ] Add `DELETE /banner/upload/{upload_id}`.
 - [ ] Delete the document blob and sidecar.
-- [ ] Support `?purge_index=true` only if index purge can be implemented with deterministic IDs.
+- [ ] Defer `?purge_index=true` until chunk IDs are reliably returned or persisted.
 - [ ] Return explicit booleans for blob, sidecar, and chunk purge.
 
 Prompt for implementer:
 
 ```text
 Strict TDD. Implement uploaded-document delete. Start with deletion without index purge, then add
-purge only if the search layer has a tested delete-by-ID or delete-by-filter seam. Do not fake a
-successful purge in production responses.
+purge in a later phase only if the search layer has a tested delete-by-ID or delete-by-filter seam.
+Do not fake a successful purge in production responses.
 ```
 
 Red tests:
 
 - [ ] `TestUploadDelete_NotFoundReturns404`
 - [ ] `TestUploadDelete_DeletesBlobAndSidecar`
-- [ ] `TestUploadDelete_PurgeFalseDoesNotCallSearch`
-- [ ] `TestUploadDelete_PurgeTruePurgesKnownChunkIDs`
-- [ ] `TestUploadDelete_PurgeTrueWithoutChunkIDsReturnsClearError`
+- [ ] `TestUploadDelete_DoesNotCallSearchByDefault`
+- [ ] `TestUploadDelete_PurgeTrueReturnsNotImplementedUntilChunkIDsPersisted`
 
 Green tasks:
 
 - [ ] Implement delete service method.
 - [ ] Add route.
-- [ ] Add search purge seam only if needed.
+- [ ] Leave search purge unimplemented until a tested chunk-ID persistence path exists.
 - [ ] Map partial-delete errors clearly.
 
 Refactor tasks:
@@ -509,8 +520,8 @@ Doc tasks:
 - [ ] Document `UPLOAD_URL_ALLOWLIST`.
 - [ ] Document sidecar failure and recovery behavior.
 - [ ] Document that upload is not queryable until chunking runs.
-- [ ] Document the final supported file-type set consistently across `INGEST.md`,
-      `PDF_UPLOAD_FLOW.md`, and agent guidance.
+- [ ] Document consistently that Phase U upload accepts PDFs only and does not support
+      DOCX/TXT/MD/SOP upload.
 
 Acceptance criteria:
 
@@ -558,11 +569,13 @@ Acceptance criteria:
 
 ## Open Questions Before Implementation
 
-- [ ] Should Phase U support only PDFs at first, or include `.docx`, `.txt`, and `.md` from day one?
+- [x] Should Phase U support only PDFs at first, or include `.docx`, `.txt`, and `.md` from day one?
+      Decision: PDF-only for Phase U; non-PDF upload is deferred.
 - [ ] Should uploaded user guides reject `year` and `version` at validation time, as the docs say?
 - [ ] Should sidecar writes use Azure Blob leases for cross-instance concurrency, or is process-local
       locking acceptable for the first pass?
-- [ ] Should chunk IDs be returned from `ingest.Run()` so sidecars can support exact index purge?
+- [x] Should chunk IDs be returned from `ingest.Run()` so sidecars can support exact index purge?
+      Decision: exact index purge is deferred until chunk IDs are reliably returned or persisted.
 - [ ] Should `GET /banner/upload` list only sidecars, or also detect orphan PDFs with missing sidecars?
 - [ ] Should Blob paths include `AZURE_STORAGE_BLOB_PREFIX`, and if yes, should responses show prefixed
       or canonical unprefixed paths?

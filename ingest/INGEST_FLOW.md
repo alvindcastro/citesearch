@@ -69,7 +69,7 @@ The operator posts the PDF as multipart/form-data with four metadata fields: `so
 The handler:
 
 1. Validates the fields. Rejects if `module` is unknown, `version`/`year` is present on a
-   user guide, or the file is not a recognised extension.
+   user guide, or the file is not a PDF.
 2. Synthesises the blob path from metadata. `source_type=banner`, `module=Finance`,
    `year=2026` → `banner/finance/releases/2026/<filename>`. The path mirrors the
    `data/docs/` folder structure used by Generation 1.
@@ -92,7 +92,7 @@ the blob write:
 
 1. Validates the URL is HTTPS and the hostname is on the `UPLOAD_URL_ALLOWLIST`.
 2. Downloads the PDF with a 60-second timeout.
-3. Validates the file extension after download.
+3. Validates after download that the file is a PDF.
 4. Continues identically to the multipart handler from step 3 onward.
 
 If the download fails (timeout, 404, 5xx), no blob is written and no sidecar is created.
@@ -158,10 +158,10 @@ For each range to process (one targeted range, or all `unchunked_ranges` in asce
 2. Call `ingest.Run()` scoped to `startPage`/`endPage`. This is the same pipeline as
    Generation 1: extract text → split into chunks → embed each chunk via Azure OpenAI →
    write to Azure Search using merge-or-upload semantics.
-3. Collect the chunk IDs produced. Chunk IDs are deterministic:
-   `MD5(blob_path + page + index)`. This means re-chunking the same page range produces the
-   same IDs, and Azure Search's merge-or-upload replaces existing chunks rather than
-   duplicating them. Re-running after a failure is safe.
+3. Record the chunks produced. The current ingest pipeline uses deterministic chunk IDs based
+   on filename, page number, and chunk index, so re-chunking the same page range can update
+   chunks in place instead of duplicating them. Exact index purge remains deferred until the
+   upload flow reliably returns or persists those chunk IDs.
 4. Append to `chunked_ranges` with the timestamp and chunk IDs.
 5. Recompute `unchunked_ranges` as the complement of the union of all `chunked_ranges`.
 6. Update `chunking_pattern`, `gap_count`, `gap_summary`.
@@ -268,8 +268,8 @@ chunking_pattern=sequential               ▼
 * if page_end=120 on a 120-page doc, unchunked_ranges becomes [] and status flips to complete
 ```
 
-The state machine has no rollback — once pages are chunked they stay in the index until
-explicitly deleted via `DELETE /banner/upload/{id}?purge_index=true`.
+The state machine has no rollback — once pages are chunked they stay in the index until an
+explicit, tested index-purge path exists.
 
 ---
 
