@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"citesearch/internal/blobstore"
+
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
@@ -39,12 +41,7 @@ func NewBlobClient(connectionString, containerName string) (*BlobClient, error) 
 	}, nil
 }
 
-// BlobInfo holds metadata about a blob document.
-type BlobInfo struct {
-	Name        string
-	SizeBytes   int64
-	ContentType string
-}
+type BlobInfo = blobstore.Info
 
 // ListDocuments lists all PDFs/text files in the container (with optional prefix).
 func (b *BlobClient) ListDocuments(prefix string) ([]BlobInfo, error) {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"io"
 	"time"
+
+	"citesearch/internal/blobstore"
 )
 
 const (
@@ -101,11 +103,7 @@ type UploadSummary struct {
 	GapSummary         string `json:"gap_summary"`
 }
 
-type BlobInfo struct {
-	Name        string `json:"name"`
-	SizeBytes   int64  `json:"size_bytes"`
-	ContentType string `json:"content_type"`
-}
+type BlobInfo = blobstore.Info
 
 type BlobStore interface {
 	Upload(ctx context.Context, blobPath string, content io.Reader, contentType string) error

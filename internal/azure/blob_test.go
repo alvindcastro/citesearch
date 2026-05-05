@@ -1,6 +1,12 @@
 package azure
 
-import "testing"
+import (
+	"testing"
+
+	"citesearch/internal/upload"
+)
+
+var _ upload.BlobStore = (*BlobClient)(nil)
 
 func TestListDocuments_IgnoresSidecarJSON(t *testing.T) {
 	tests := []struct {
