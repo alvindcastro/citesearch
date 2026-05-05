@@ -808,7 +808,7 @@ If an upload or download fails, no sidecar is created.
 ### System layer vs. wizard layer
 
 The system layer (Go adapter) is range-agnostic — any non-overlapping page range in any order
-is accepted. The wizard layer (Agent 19 in `CLAUDE_AGENTS.md`) adds two modes:
+is accepted. The planned wizard layer, Agent 19, adds two modes:
 
 - **Default mode:** enforces left-to-right contiguous chunking. Always uses
   `unchunked_ranges[0].start` as page_start. Intercepts out-of-order requests with a redirect.
@@ -838,4 +838,5 @@ from the status response to diagnose missing results.
 See [PDF_UPLOAD_FLOW.md](PDF_UPLOAD_FLOW.md) for endpoint contracts, curl examples, and the
 error reference.
 
-See [CLAUDE_AGENTS.md](CLAUDE_AGENTS.md) § Agent 19 to drive this flow conversationally.
+Agent 19 still needs to be added to [../wiki/CLAUDE_AGENTS.md](../wiki/CLAUDE_AGENTS.md)
+to drive this flow conversationally.

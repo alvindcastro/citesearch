@@ -256,8 +256,8 @@ Chunk a page range of an already-uploaded PDF. Reads from Blob, runs the ingest 
 updates the sidecar.
 
 **System-layer behavior:** the adapter accepts any non-overlapping page range regardless of
-order. Pages 33-44 can be chunked before pages 1-32. The wizard layer (Agent 19) enforces
-left-to-right order by default — see [CLAUDE_AGENTS.md](CLAUDE_AGENTS.md) § Agent 19.
+order. Pages 33-44 can be chunked before pages 1-32. The planned wizard layer (Agent 19)
+will enforce left-to-right order by default.
 
 **Request (application/json):**
 
@@ -516,7 +516,7 @@ The system layer accepts any non-overlapping page range in any order. This produ
 
 **When this occurs:**
 - A developer calls the API directly with arbitrary ranges
-- Agent 19's advanced mode targets a specific chapter
+- The planned Agent 19 advanced mode targets a specific chapter
 - A chunk-all-remaining call fails mid-way, leaving some gaps filled and others not
 
 **Example: chunking pages 33-44 then 78-90 on a 120-page document**

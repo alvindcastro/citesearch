@@ -195,7 +195,7 @@ sparse      → chunked_ranges has two or more non-adjacent entries
 
 `sequential` is the normal production state for a fully or partially indexed document. `sparse`
 occurs when pages are chunked out of order — either via direct API calls with arbitrary ranges,
-or when Agent 19's advanced mode is used.
+or when the planned Agent 19 advanced mode is used.
 
 ### After the chunk call
 
@@ -295,18 +295,20 @@ communicating coverage boundaries to operators and users.
 
 ---
 
-## Stage 7 — The Wizard Layer (Agent 19)
+## Stage 7 — The Wizard Layer (Planned Agent 19)
 
 The system layer (Go adapter) is range-agnostic. Any non-overlapping page range in any order
 is accepted. This is intentional — developers calling the API directly get full flexibility.
 
-The wizard layer (Agent 19) is the opinionated operator interface on top of the system layer.
+The wizard layer, planned as Agent 19, is the opinionated operator interface on top of the
+system layer.
 It operates in two modes:
 
 ### Default mode
 
-Agent 19 enforces left-to-right contiguous chunking. It always uses `unchunked_ranges[0].start`
-as `page_start`. It only asks the operator for a `page_end` — how many pages to index now.
+Agent 19 will enforce left-to-right contiguous chunking. It always uses
+`unchunked_ranges[0].start` as `page_start`. It only asks the operator for a `page_end` —
+how many pages to index now.
 
 If the operator asks for an out-of-order range ("chunk pages 78-90 first"), the agent
 intercepts before making any tool call and offers two choices: extend the range back to start
@@ -370,7 +372,7 @@ Operator has a PDF
                                           │
                                ┌──────────┴──────────────────────┐
                                │                                  │
-                        Agent 19                           Direct API call
+                        Agent 19 (planned)                 Direct API call
                         (wizard layer)                     (system layer)
                                │                                  │
                         default mode                    any non-overlapping

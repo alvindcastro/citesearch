@@ -36,8 +36,6 @@ Blob-plus-sidecar model.
 - [ ] Confirm whether `DOCX`, `TXT`, and `MD` are in scope for upload now or whether Phase U should
       start with PDF only despite older tables mentioning multiple extensions.
 - [ ] Confirm whether index purge on delete must be implemented in the first delete phase or deferred.
-- [ ] Confirm whether `INGEST_ADDITIONS.md` should remain as historical merge notes or be retired
-      after its useful content has been merged into the canonical docs.
 
 Prompt for implementer:
 
@@ -568,5 +566,3 @@ Acceptance criteria:
 - [ ] Should `GET /banner/upload` list only sidecars, or also detect orphan PDFs with missing sidecars?
 - [ ] Should Blob paths include `AZURE_STORAGE_BLOB_PREFIX`, and if yes, should responses show prefixed
       or canonical unprefixed paths?
-- [ ] Should `INGEST_ADDITIONS.md` be deleted once this prompt plan exists, or kept as historical
-      design context until upload implementation is complete?
