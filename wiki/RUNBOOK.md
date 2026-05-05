@@ -62,8 +62,7 @@ curl -s -X POST http://localhost:8000/index/create
 ### 4. Ingest documents (first time only)
 
 Place PDFs under `data/docs/` following the canonical folder structure, then trigger ingest.
-
-See [INGEST.md](INGEST.md) for the complete reference — folder naming rules, naming conventions, pre-ingest checklist, time estimates, and re-ingest safety.
+See [INGEST.md](INGEST.md) for the full reference — folder conventions, naming rules, pre-ingest checklist, and time estimates.
 
 **Quick start (Banner General release notes):**
 ```bash
@@ -472,6 +471,7 @@ Set the URL once in Botpress Cloud. It never changes.
 | Botpress shows no answer | ngrok URL changed → update `RAG_ADAPTER_URL` in Botpress Cloud → Publish |
 | `index/create` returns 409 | Index already exists — safe to ignore, or `overwrite:true` |
 | Azure auth error on startup | Check `AZURE_OPENAI_ENDPOINT` and `AZURE_OPENAI_API_KEY` in `.env` |
+| Document ingestion fails or PDFs ingest as garbage text | See [INGEST.md § Troubleshooting Bad PDFs](INGEST.md#troubleshooting-bad-pdfs) |
 
 Full troubleshooting guide: [TROUBLESHOOTING.md](TROUBLESHOOTING.md)
 

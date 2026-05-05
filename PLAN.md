@@ -2305,7 +2305,7 @@ citesearch backend only, not the adapter.
 
   Add to TOC, Tool Reference table, Cost Control table, and Priority Recommendation section.
 
-- [ ] **L.4 — Update `wiki/INTERNALS.md` PDF extraction limitations**
+- [x] **L.4 — Update `wiki/INTERNALS.md` PDF extraction limitations**
 
   **Prompt for implementer:**
   In `wiki/INTERNALS.md` § Known Limitations #1 (PDF Text Extraction Quality), expand with:
@@ -2313,7 +2313,7 @@ citesearch backend only, not the adapter.
   - Steps to use Azure AI Document Intelligence Layout API as a pre-processing step
   - A note that `dry_run=true` (Phase L.2) will surface scanned PDFs before a live ingest
 
-- [ ] **L.5 — Add `wiki/INGEST.md` link to `wiki/RUNBOOK.md`**
+- [x] **L.5 — Add `wiki/INGEST.md` link to `wiki/RUNBOOK.md`**
 
   **Prompt for implementer:**
   In `wiki/RUNBOOK.md`, add a pointer to `wiki/INGEST.md` in the "One-time setup" section:

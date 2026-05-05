@@ -562,20 +562,23 @@ Uncommenting the imports before the files exist would break compilation for anyo
 ### 1. PDF Text Extraction Quality
 
 `github.com/ledongthuc/pdf` extracts text directly from PDF character streams. It works well for
-text-based PDFs but will produce garbage or empty output for:
+text-layer PDFs, but scanned PDFs and some unusually encoded PDFs can yield garbled or empty text:
 - Scanned PDFs (image-based) — no OCR is performed
 - PDFs with unusual encoding or embedded fonts that remap character codes
 
-**Symptom:** Chunks with garbage characters or empty text in the index.
+**Symptom:** Garbled chunks or PDFs that contribute no text to the index.
 
-**Detecting scanned PDFs before ingest:**
-- Open the PDF in a viewer and try to select text — if you can't, it's scanned
-- Size heuristic: scanned PDFs are typically >200 KB/page; text-layer PDFs are 20–80 KB/page
-- The dry-run mode (`POST /banner/ingest` with `dry_run=true`, Phase L.2) reports `"no pages extracted — may be scanned PDF"` as a warning for any PDF where `extractPDFPages()` returns 0 text pages
+**Detecting likely scanned PDFs before ingest:**
+- Open the PDF in a viewer and try to select text. If you cannot select text, it is likely scanned.
+- Preflight heuristic: if the file is under roughly 30 KB/page, treat it as a likely bad candidate for the current parser and inspect it manually before ingest.
+- Run `POST /banner/ingest` with `dry_run=true`. For each PDF with one or more pages but zero text-extractable pages, the response adds `"no pages extracted — may be scanned PDF"` to that file's `warnings`.
 
 **Fix options:**
-- **Azure AI Document Intelligence (Layout API):** Send the PDF to the Layout endpoint; it returns
-  markdown-structured text with OCR. Save the result as `.txt` and ingest the `.txt` file instead.
+- **Azure AI Document Intelligence (Layout API):**
+  1. Send the PDF to the Layout endpoint so Azure performs OCR and reconstructs reading order.
+  2. Export the returned markdown or plain text to a `.txt` file next to the original PDF.
+  3. Review the extracted text for tables, headers, and page breaks that may need cleanup.
+  4. Ingest the `.txt` file instead of the original PDF.
   See [Azure AI Document Intelligence docs](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/).
 - **Adobe Acrobat:** Run "Recognize Text" (OCR) on the PDF to create a searchable version
   before ingesting.
