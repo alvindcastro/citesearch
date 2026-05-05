@@ -230,10 +230,10 @@ Acceptance criteria:
 
 ## Phase U.5 - Multipart Upload Endpoint
 
-- [ ] Add `POST /banner/upload`.
-- [ ] Store uploaded PDF in Blob Storage.
-- [ ] Create initial sidecar with `status=pending`, `chunking_pattern=none`, and one full-page gap.
-- [ ] Return upload metadata and do not chunk.
+- [x] Add `POST /banner/upload`.
+- [x] Store uploaded PDF in Blob Storage.
+- [x] Create initial sidecar with `status=pending`, `chunking_pattern=none`, and one full-page gap.
+- [x] Return upload metadata and do not chunk.
 
 Prompt for implementer:
 
@@ -247,33 +247,33 @@ tests fail for the missing route. Phase U upload is PDF-only; tests must prove n
 
 Red tests:
 
-- [ ] `TestBannerUpload_MissingSourceType_Returns400`
-- [ ] `TestBannerUpload_MissingModuleForBanner_Returns400`
-- [ ] `TestBannerUpload_UnsupportedExtension_Returns400`
-- [ ] `TestBannerUpload_SOPSourceType_Returns400`
-- [ ] `TestBannerUpload_FileTooLarge_Returns413`
-- [ ] `TestBannerUpload_DuplicateBlob_Returns409`
-- [ ] `TestBannerUpload_CreatesBlobAndInitialSidecar`
-- [ ] `TestBannerUpload_DoesNotCallIngest`
-- [ ] `TestBannerUpload_RouteIsRegistered`
+- [x] `TestBannerUpload_MissingSourceType_Returns400`
+- [x] `TestBannerUpload_MissingModuleForBanner_Returns400`
+- [x] `TestBannerUpload_UnsupportedExtension_Returns400`
+- [x] `TestBannerUpload_SOPSourceType_Returns400`
+- [x] `TestBannerUpload_FileTooLarge_Returns413`
+- [x] `TestBannerUpload_DuplicateBlob_Returns409`
+- [x] `TestBannerUpload_CreatesBlobAndInitialSidecar`
+- [x] `TestBannerUpload_DoesNotCallIngest`
+- [x] `TestBannerUpload_RouteIsRegistered`
 
 Green tasks:
 
-- [ ] Add upload handler and route.
-- [ ] Stream multipart file to Blob or bounded temp file as needed by `CountPages`.
-- [ ] Write sidecar only after blob write and page count succeed.
-- [ ] Return response shape from `PDF_UPLOAD_FLOW.md`.
+- [x] Add upload handler and route.
+- [x] Stream multipart file to Blob or bounded temp file as needed by `CountPages`.
+- [x] Write sidecar only after blob write and page count succeed.
+- [x] Return response shape from `PDF_UPLOAD_FLOW.md`.
 
 Refactor tasks:
 
-- [ ] Keep multipart parsing isolated from upload service logic.
-- [ ] Delete temp files after upload/page counting.
+- [x] Keep multipart parsing isolated from upload service logic.
+- [x] Delete temp files after upload/page counting.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/api/... -run BannerUpload -v` passes.
-- [ ] `go test ./internal/upload/... -v` passes.
-- [ ] Response includes `upload_id`, `blob_path`, `total_pages`, `status`, `chunking_pattern`,
+- [x] `go test ./internal/api/... -run BannerUpload -v` passes.
+- [x] `go test ./internal/upload/... -v` passes.
+- [x] Response includes `upload_id`, `blob_path`, `total_pages`, `status`, `chunking_pattern`,
       `gap_count`, `gap_summary`, and `message`.
 
 ## Phase U.6 - URL Upload Endpoint with SSRF Protection

@@ -541,8 +541,8 @@ PDF, counts pages, and creates the sidecar. It does not chunk.
 | `file` | binary | Yes | PDF file |
 | `source_type` | string | Yes | `banner` \| `banner_user_guide` |
 | `module` | string | Yes | `General`, `Finance`, `Student`, etc. |
-| `version` | string | No | e.g. `9.3.37.2` — required for release notes |
-| `year` | string | No | e.g. `2026` — required for release notes |
+| `version` | string | Release notes | e.g. `9.3.37.2` — omit for user guides |
+| `year` | string | Release notes | e.g. `2026` — omit for user guides |
 
 **Response:**
 ```json

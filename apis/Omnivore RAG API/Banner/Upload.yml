@@ -1,0 +1,33 @@
+info:
+  name: Upload
+  type: http
+  seq: 10
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/upload"
+  body:
+    type: multipart
+    data:
+      - name: file
+        type: file
+        value: Banner_Finance_9.3.22_Release_Notes.pdf
+      - name: source_type
+        type: text
+        value: banner
+      - name: module
+        type: text
+        value: Finance
+      - name: version
+        type: text
+        value: 9.3.22
+      - name: year
+        type: text
+        value: "2026"
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

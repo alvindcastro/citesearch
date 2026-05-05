@@ -74,12 +74,14 @@ The handler:
    `year=2026` → `banner/finance/releases/2026/<filename>`. The path mirrors the
    `data/docs/` folder structure used by Generation 1.
 3. Checks for an existing blob at that path. Returns 409 if one exists.
-4. Writes the PDF to Blob Storage.
-5. Calls `ingest.CountPages()` to extract the total page count from the PDF without chunking.
+4. Calls `ingest.CountPages()` to extract the total page count from the PDF without chunking.
+5. Writes the PDF to Blob Storage.
 6. Assigns a UUID as `upload_id`.
 7. Creates the initial sidecar at `{blob_path}.chunks.json` with `status=pending`,
-   `chunked_ranges=[]`, `total_pages` from step 5.
-8. Returns `upload_id`, `blob_path`, `total_pages`, `status=pending`.
+   `chunked_ranges=[]`, `chunking_pattern=none`, `total_pages` from step 4, and one full-page
+   gap in `unchunked_ranges`.
+8. Returns `upload_id`, `blob_path`, `total_pages`, `status=pending`, `chunking_pattern`,
+   `gap_count`, `gap_summary`, and a message explaining that no pages are chunked yet.
 
 At this point the PDF is in Blob Storage but nothing is in Azure Search.
 

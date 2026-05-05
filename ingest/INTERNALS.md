@@ -156,7 +156,8 @@ Run(docsPath, overwrite, pagesPerBatch, startPage, endPage)
 **Phase U entry points (upload/chunk path):**
 
 ```
-POST /banner/upload         → internal/upload/handler.go → UploadPDF()
+POST /banner/upload         → internal/api/handlers.go → BannerUpload()
+                              internal/upload/service.go → CreateUploadFromFile()
                               Writes PDF to Blob, extracts page count, creates sidecar JSON blob.
                               Does NOT call ingest.Run().
 
@@ -771,18 +772,19 @@ No changes to the ingest pipeline are required.
      `ReadSidecar()`, `WriteSidecar()`, `SidecarPath()`, `ListUploads()`,
      `ComputeUnchunkedRanges()`, `CheckOverlap()`, `ComputePattern()`,
      `GapSummary()`, `ValidateUploadMetadata()`, `SynthesizeBlobPath()`
-   - `handler.go` — `UploadPDF()`, `UploadFromURL()`, `ChunkPages()`, `ChunkingStatus()`,
-     `ListUploads()`, `DeleteUpload()`
+   - API handlers — multipart parsing lives in `internal/api`; upload orchestration lives in
+     `internal/upload/service.go`
 
-2. `UploadPDF()` flow:
+2. `BannerUpload()` / `CreateUploadFromFile()` flow:
    - Validate fields (source_type, module, version/year rules)
    - Synthesize blob path from metadata
    - Check for existing blob at that path (409 if exists)
-   - Write PDF to Blob via `internal/azure/blob.go`
    - Extract total page count using `ingest.CountPages()`
-   - Create initial sidecar (`status=pending`, `chunked_ranges=[]`)
+   - Write PDF to Blob via `internal/azure/blob.go`
+   - Create initial sidecar (`status=pending`, `chunking_pattern=none`, `chunked_ranges=[]`)
    - Write sidecar to `{blob_path}.chunks.json`
-   - Return `upload_id`, `blob_path`, `total_pages`, `status`
+   - Return `upload_id`, `blob_path`, `total_pages`, `status`, `chunking_pattern`,
+     `gap_count`, `gap_summary`, and `message`
 
 3. `ChunkPages()` flow:
    - Read sidecar by `upload_id`

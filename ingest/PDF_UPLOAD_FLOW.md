@@ -165,8 +165,8 @@ Upload a PDF to Blob Storage. Creates the sidecar. Does not chunk.
 | `file` | Yes | The PDF file. |
 | `source_type` | Yes | `banner` or `banner_user_guide`. |
 | `module` | Yes | `General`, `Finance`, `Student`, etc. |
-| `version` | No | e.g. `9.3.22` — release notes only. |
-| `year` | No | e.g. `2026` — release notes only. |
+| `version` | Release notes | e.g. `9.3.22` — omit for user guides. |
+| `year` | Release notes | e.g. `2026` — omit for user guides. |
 
 **Response:**
 
@@ -217,8 +217,8 @@ unchanged. Does not chunk.
 | `url` | Yes | HTTPS URL to the PDF. Must be on the configured allowlist. |
 | `source_type` | Yes | `banner` or `banner_user_guide`. |
 | `module` | Yes | `General`, `Finance`, `Student`, etc. |
-| `version` | No | e.g. `9.3.22` — release notes only. |
-| `year` | No | e.g. `2026` — release notes only. |
+| `version` | Release notes | e.g. `9.3.22` — omit for user guides. |
+| `year` | Release notes | e.g. `2026` — omit for user guides. |
 
 **Security constraints:**
 

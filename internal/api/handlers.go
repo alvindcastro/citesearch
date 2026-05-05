@@ -5,10 +5,16 @@
 package api
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -16,6 +22,7 @@ import (
 	"citesearch/internal/azure"
 	"citesearch/internal/ingest"
 	"citesearch/internal/rag"
+	"citesearch/internal/upload"
 	"citesearch/internal/websearch"
 
 	"github.com/gin-gonic/gin"
@@ -23,10 +30,11 @@ import (
 
 // Handler holds shared dependencies injected at startup.
 type Handler struct {
-	cfg      *config.Config
-	openai   *azure.OpenAIClient
-	search   *azure.SearchClient
-	pipeline *rag.Pipeline
+	cfg           *config.Config
+	openai        *azure.OpenAIClient
+	search        *azure.SearchClient
+	pipeline      *rag.Pipeline
+	uploadService *upload.Service
 }
 
 // NewHandler creates a Handler with all dependencies wired up.
@@ -35,10 +43,11 @@ func NewHandler(cfg *config.Config) *Handler {
 	search := azure.NewSearchClient(cfg)
 	tavily := websearch.NewTavilyClient(cfg.TavilyAPIKey) // nil when TAVILY_API_KEY is unset
 	return &Handler{
-		cfg:      cfg,
-		openai:   openai,
-		search:   search,
-		pipeline: rag.NewPipeline(openai, search, tavily, cfg.ConfidenceHighThreshold, cfg.ConfidenceLowThreshold),
+		cfg:           cfg,
+		openai:        openai,
+		search:        search,
+		pipeline:      rag.NewPipeline(openai, search, tavily, cfg.ConfidenceHighThreshold, cfg.ConfidenceLowThreshold),
+		uploadService: newUploadService(cfg),
 	}
 }
 
@@ -330,6 +339,145 @@ func (h *Handler) BannerIngest(c *gin.Context) {
 }
 
 // ─── Banner — Blob Storage ────────────────────────────────────────────────────
+
+// BannerUpload godoc
+//
+//	@Summary	Upload a Banner PDF to Blob Storage without chunking
+//	@Tags		banner
+//	@Accept		multipart/form-data
+//	@Produce	json
+//	@Param		file		formData	file	true	"PDF file"
+//	@Param		source_type	formData	string	true	"banner or banner_user_guide"
+//	@Param		module		formData	string	true	"Banner module"
+//	@Param		version		formData	string	false	"Release version"
+//	@Param		year		formData	string	false	"Release year"
+//	@Success	200			{object}	upload.UploadResponse
+//	@Failure	400			{object}	map[string]string
+//	@Failure	409			{object}	map[string]string
+//	@Failure	413			{object}	map[string]string
+//	@Failure	500			{object}	map[string]string
+//	@Router		/banner/upload [post]
+func (h *Handler) BannerUpload(c *gin.Context) {
+	fileHeader, err := c.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		return
+	}
+
+	req := upload.UploadRequest{
+		SourceType: c.PostForm("source_type"),
+		Module:     c.PostForm("module"),
+		Version:    c.PostForm("version"),
+		Year:       c.PostForm("year"),
+		Filename:   fileHeader.Filename,
+		SizeBytes:  fileHeader.Size,
+	}
+	if _, err := upload.ValidateUploadMetadata(req, h.cfg.MaxUploadSizeMB); err != nil {
+		writeUploadError(c, err)
+		return
+	}
+
+	service := h.uploadService
+	if service == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "AZURE_STORAGE_CONNECTION_STRING is not configured"})
+		return
+	}
+
+	src, err := fileHeader.Open()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	defer src.Close()
+
+	tempFile, err := os.CreateTemp("", "banner-upload-*"+strings.ToLower(filepath.Ext(fileHeader.Filename)))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
+
+	if _, err := io.Copy(tempFile, src); err != nil {
+		tempFile.Close()
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := tempFile.Close(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	resp, err := service.CreateUploadFromFile(c.Request.Context(), req, tempPath, h.cfg.MaxUploadSizeMB)
+	if err != nil {
+		writeUploadError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+func writeUploadError(c *gin.Context, err error) {
+	switch {
+	case errors.Is(err, upload.ErrUploadTooLarge):
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrDuplicateBlob):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrMissingSourceType),
+		errors.Is(err, upload.ErrUnsupportedSourceType),
+		errors.Is(err, upload.ErrSOPUploadUnsupported),
+		errors.Is(err, upload.ErrMissingModule),
+		errors.Is(err, upload.ErrUnknownModule),
+		errors.Is(err, upload.ErrMissingVersion),
+		errors.Is(err, upload.ErrMissingYear),
+		errors.Is(err, upload.ErrUserGuideVersionOrYear),
+		errors.Is(err, upload.ErrMissingFilename),
+		errors.Is(err, upload.ErrUnsupportedExtension),
+		errors.Is(err, upload.ErrNonPDFUpload):
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	default:
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+	}
+}
+
+func newUploadService(cfg *config.Config) *upload.Service {
+	if cfg.AzureStorageConnectionString == "" {
+		return nil
+	}
+	blobClient, err := azure.NewBlobClient(cfg.AzureStorageConnectionString, cfg.AzureStorageContainerName)
+	if err != nil {
+		slog.Warn("upload service disabled", "error", err)
+		return nil
+	}
+	return upload.NewService(upload.Dependencies{
+		BlobStore:    blobClient,
+		PageCounter:  ingestPageCounter{},
+		Clock:        systemClock{},
+		IDGenerator:  randomIDGenerator{},
+		IngestRunner: nil,
+	})
+}
+
+type ingestPageCounter struct{}
+
+func (ingestPageCounter) CountPages(filePath string) (int, error) {
+	return ingest.CountPages(filePath)
+}
+
+type systemClock struct{}
+
+func (systemClock) Now() time.Time {
+	return time.Now().UTC()
+}
+
+type randomIDGenerator struct{}
+
+func (randomIDGenerator) NewID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
+	}
+	return hex.EncodeToString(b)
+}
 
 type blobSyncRequest struct {
 	ContainerName   string `json:"container_name"`

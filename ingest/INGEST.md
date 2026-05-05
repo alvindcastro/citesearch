@@ -548,8 +548,8 @@ Writes the PDF to Blob Storage and creates the sidecar. Does not chunk.
 | `file` | binary | Yes | PDF file |
 | `source_type` | string | Yes | `banner` \| `banner_user_guide` |
 | `module` | string | Yes | `General`, `Finance`, `Student`, etc. |
-| `version` | string | No | e.g. `9.3.22` — release notes only |
-| `year` | string | No | e.g. `2026` — release notes only |
+| `version` | string | Release notes | e.g. `9.3.22` — omit for user guides |
+| `year` | string | Release notes | e.g. `2026` — omit for user guides |
 
 **Response:**
 ```json

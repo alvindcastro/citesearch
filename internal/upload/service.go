@@ -2,10 +2,16 @@ package upload
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os"
 	"sort"
 	"strings"
 )
+
+const uploadSuccessMessage = "PDF uploaded. No pages chunked yet. Call POST /banner/upload/chunk to begin."
+
+var ErrDuplicateBlob = errors.New("a PDF already exists at this blob path")
 
 // Service is the upload package entry point for sidecar persistence and chunk orchestration.
 type Service struct {
@@ -30,6 +36,67 @@ func IsSidecarPath(blobPath string) bool {
 
 func (s *Service) UploadBlob(ctx context.Context, blobPath string, content io.Reader, contentType string) error {
 	return s.deps.BlobStore.Upload(ctx, blobPath, content, contentType)
+}
+
+func (s *Service) CreateUploadFromFile(ctx context.Context, req UploadRequest, localPath string, maxUploadSizeMB int) (UploadResponse, error) {
+	meta, err := ValidateUploadMetadata(req, maxUploadSizeMB)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+
+	blobPath := SynthesizeBlobPath(meta)
+	exists, err := s.deps.BlobStore.Exists(ctx, blobPath)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	if exists {
+		return UploadResponse{}, ErrDuplicateBlob
+	}
+
+	totalPages, err := s.deps.PageCounter.CountPages(localPath)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+
+	file, err := os.Open(localPath)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	defer file.Close()
+
+	if err := s.UploadBlob(ctx, blobPath, file, "application/pdf"); err != nil {
+		return UploadResponse{}, err
+	}
+
+	state := SidecarState{
+		BlobPath:      blobPath,
+		UploadID:      s.deps.IDGenerator.NewID(),
+		UploadedAt:    s.deps.Clock.Now(),
+		SourceType:    meta.SourceType,
+		Module:        meta.Module,
+		Version:       meta.Version,
+		Year:          meta.Year,
+		TotalPages:    totalPages,
+		ChunkedRanges: nil,
+	}
+	derived, _, err := DeriveSidecarState(state)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	if err := s.WriteSidecar(ctx, derived); err != nil {
+		return UploadResponse{}, err
+	}
+
+	return UploadResponse{
+		UploadID:        derived.UploadID,
+		BlobPath:        derived.BlobPath,
+		TotalPages:      derived.TotalPages,
+		Status:          derived.Status,
+		ChunkingPattern: derived.ChunkingPattern,
+		GapCount:        derived.GapCount,
+		GapSummary:      derived.GapSummary,
+		Message:         uploadSuccessMessage,
+	}, nil
 }
 
 func (s *Service) WriteSidecar(ctx context.Context, state SidecarState) error {
