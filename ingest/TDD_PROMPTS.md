@@ -58,11 +58,11 @@ Acceptance criteria:
 
 ## Phase U.1 - Test Seams and Upload Package Skeleton
 
-- [ ] Add an `internal/upload` package without production behavior beyond types and interfaces.
-- [ ] Define seams for Blob storage, page counting, ingest execution, clock, UUID generation, and
+- [x] Add an `internal/upload` package without production behavior beyond types and interfaces.
+- [x] Define seams for Blob storage, page counting, ingest execution, clock, UUID generation, and
       HTTP download.
-- [ ] Keep Azure SDK types out of handler tests.
-- [ ] Keep sidecar JSON structs in the upload package, not in `internal/api`.
+- [x] Keep Azure SDK types out of handler tests.
+- [x] Keep sidecar JSON structs in the upload package, not in `internal/api`.
 
 Prompt for implementer:
 
@@ -75,26 +75,27 @@ logic yet. Keep the public surface small and avoid Azure SDK dependencies in tes
 
 Red tests:
 
-- [ ] `TestUploadPackage_ExposesSidecarStateJSONShape`
-- [ ] `TestUploadPackage_AllowsFakeBlobStore`
-- [ ] `TestUploadPackage_AllowsFakeIngestRunner`
+- [x] `TestUploadPackage_ExposesSidecarStateJSONShape`
+- [x] `TestUploadPackage_AllowsFakeBlobStore`
+- [x] `TestUploadPackage_AllowsFakeIngestRunner`
+- [x] `TestUploadPackage_ServiceKeepsDependenciesExplicit`
 
 Green tasks:
 
-- [ ] Create `internal/upload` package.
-- [ ] Add sidecar/request/response structs with JSON tags matching `PDF_UPLOAD_FLOW.md`.
-- [ ] Add interfaces needed by future phases.
+- [x] Create `internal/upload` package.
+- [x] Add sidecar/request/response structs with JSON tags matching `PDF_UPLOAD_FLOW.md`.
+- [x] Add interfaces needed by future phases.
 
 Refactor tasks:
 
-- [ ] Move any generic page-range structs into one file.
-- [ ] Keep constructor defaults explicit so handlers can wire real dependencies later.
+- [x] Move any generic page-range structs into one file.
+- [x] Keep constructor defaults explicit so handlers can wire real dependencies later.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/upload/... -v` passes.
-- [ ] No handler routes are added yet.
-- [ ] No live Azure dependency is required.
+- [x] `go test ./internal/upload/... -v` passes.
+- [x] No handler routes are added yet.
+- [x] No live Azure dependency is required.
 
 ## Phase U.2 - Sidecar Range Math
 
