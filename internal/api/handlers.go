@@ -276,18 +276,27 @@ type ingestRequest struct {
 	EndPage       int    `json:"end_page"`
 }
 
+type bannerIngestRequest struct {
+	Overwrite     bool   `json:"overwrite"`
+	DocsPath      string `json:"docs_path"`
+	PagesPerBatch int    `json:"pages_per_batch"`
+	StartPage     int    `json:"start_page"`
+	EndPage       int    `json:"end_page"`
+	DryRun        bool   `json:"dry_run"`
+}
+
 // BannerIngest godoc
 //
 //	@Summary	Ingest Banner release note PDFs into the search index
 //	@Tags		banner
 //	@Accept		json
 //	@Produce	json
-//	@Param		body	body		ingestRequest	false	"Ingest options"
+//	@Param		body	body		bannerIngestRequest	false	"Ingest options"
 //	@Success	200		{object}	map[string]any
 //	@Failure	500		{object}	map[string]string
 //	@Router		/banner/ingest [post]
 func (h *Handler) BannerIngest(c *gin.Context) {
-	var req ingestRequest
+	var req bannerIngestRequest
 	_ = c.ShouldBindJSON(&req)
 	if req.DocsPath == "" {
 		req.DocsPath = "data/docs/banner"
@@ -299,7 +308,18 @@ func (h *Handler) BannerIngest(c *gin.Context) {
 	slog.Info("banner/ingest",
 		"path", req.DocsPath, "overwrite", req.Overwrite,
 		"pages_per_batch", req.PagesPerBatch, "start", req.StartPage, "end", req.EndPage,
+		"dry_run", req.DryRun,
 	)
+
+	if req.DryRun {
+		report, err := ingest.DryRunReport(req.DocsPath)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+		c.JSON(http.StatusOK, report)
+		return
+	}
 
 	result, err := ingest.Run(h.cfg, req.DocsPath, req.Overwrite, req.PagesPerBatch, req.StartPage, req.EndPage)
 	if err != nil {

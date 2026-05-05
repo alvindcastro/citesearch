@@ -59,6 +59,26 @@ curl -s -X POST http://localhost:8000/index/create
 # Expected: {"status":"index created"} or {"status":"index already exists"}
 ```
 
+### 4. Ingest documents (first time only)
+
+Place PDFs under `data/docs/` following the canonical folder structure, then trigger ingest.
+
+See [INGEST.md](INGEST.md) for the complete reference — folder naming rules, naming conventions, pre-ingest checklist, time estimates, and re-ingest safety.
+
+**Quick start (Banner General release notes):**
+```bash
+curl -s -X POST http://localhost:8000/banner/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"docs_path":"data/docs/banner/general/releases","overwrite":false}' | jq .
+```
+
+**Quick start (SOP documents):**
+```bash
+curl -s -X POST http://localhost:8000/sop/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"docs_path":"data/docs/sop","overwrite":false}' | jq .
+```
+
 ---
 
 ## Path A — Docker Compose (recommended)

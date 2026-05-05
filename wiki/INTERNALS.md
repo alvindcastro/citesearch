@@ -567,7 +567,20 @@ text-based PDFs but will produce garbage or empty output for:
 - PDFs with unusual encoding or embedded fonts that remap character codes
 
 **Symptom:** Chunks with garbage characters or empty text in the index.
-**Fix:** Pre-process problem PDFs with a proper OCR tool (e.g., Azure AI Document Intelligence).
+
+**Detecting scanned PDFs before ingest:**
+- Open the PDF in a viewer and try to select text — if you can't, it's scanned
+- Size heuristic: scanned PDFs are typically >200 KB/page; text-layer PDFs are 20–80 KB/page
+- The dry-run mode (`POST /banner/ingest` with `dry_run=true`, Phase L.2) reports `"no pages extracted — may be scanned PDF"` as a warning for any PDF where `extractPDFPages()` returns 0 text pages
+
+**Fix options:**
+- **Azure AI Document Intelligence (Layout API):** Send the PDF to the Layout endpoint; it returns
+  markdown-structured text with OCR. Save the result as `.txt` and ingest the `.txt` file instead.
+  See [Azure AI Document Intelligence docs](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/).
+- **Adobe Acrobat:** Run "Recognize Text" (OCR) on the PDF to create a searchable version
+  before ingesting.
+- **Ellucian PDFs:** Ellucian release notes and user guides are always text-based. If one appears
+  scanned, re-download it from the Ellucian Customer Center — the wrong file was likely downloaded.
 
 ### 2. Authentication
 

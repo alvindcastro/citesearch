@@ -2185,3 +2185,361 @@ on chatbot answers. Store entries in NDJSON. Powers Agents 15 and 16 (analytics 
 - [ ] `POST /chat/feedback {}` → 400 (missing session_id)
 - [ ] `FEEDBACK_LOG_PATH=""` → `NewDefaultFeedbackLogger()` returns `*NoopFeedbackLogger`
 - [ ] `go build ./...` succeeds
+
+---
+
+## Phase L — PDF Workflow Documentation & Tooling
+
+**Goal:** Eliminate the operational blind spots in the ingestion pipeline. Today, operators have no
+pre-flight validation, no time estimate, and no safe partial re-ingest path. A wrong folder name
+silently produces unchunkable metadata; a scanned PDF produces garbage chunks that pollute retrieval.
+Phase L closes these gaps through documentation, one new backend endpoint, and a new agent.
+
+**No adapter changes.** This phase is documentation-first. The one coding task (L.3) touches the
+citesearch backend only, not the adapter.
+
+### Identified Pain Points
+
+| # | Pain Point | Impact |
+|---|---|---|
+| 1 | Metadata is entirely path-derived with no validation | Wrong module/version silently indexed |
+| 2 | No dry-run or preflight mode | 20-min ingest fails midway with no preview |
+| 3 | Scanned PDF detection absent | Garbage chunks degrade retrieval quality |
+| 4 | Finance user guide gap undocumented | API returns 400; no clear acquisition plan |
+| 5 | Chunking strategy selection is implicit | Operators don't know why Finance guide might chunk badly |
+| 6 | Re-ingest safety undocumented | `overwrite=true` silently deletes SOPs too |
+| 7 | Student user guide exists in two folders | Confusing: `use/` vs dated folder |
+| 8 | No ingestion time estimate | Large user guide ingests block operators for 60–90 min |
+| 9 | No single naming/folder convention reference | Operators have to read Go source to understand rules |
+| 10 | Orphan chunks after CHUNK_SIZE change | No cleanup path documented |
+
+---
+
+### Tasks
+
+- [x] **L.1 — Create `wiki/INGEST.md`**
+
+  **Status:** Done by 2026-04-23 brainstorm session.
+
+  Created `wiki/INGEST.md` — the canonical operator reference for the ingest pipeline. Covers:
+  - Canonical folder structure with module → path mapping table
+  - File naming conventions for release notes, user guides, and SOPs
+  - How metadata is extracted from file paths (module, version, year, source_type)
+  - Supported file types and their processing paths
+  - Chunking strategy selection per source_type (with heading regex documentation)
+  - Source type tagging rules
+  - Pre-ingest checklist (10 items)
+  - Running an ingest (curl commands for all collections)
+  - Re-ingest safety (three scenarios: same file, changed CHUNK_SIZE, failed midway)
+  - Finance user guide gap — current status table + acquisition steps
+  - Ingestion time estimates (table + calculation method)
+  - Troubleshooting bad PDFs (6 symptom/fix entries)
+  - How to add a new document collection (step-by-step checklist)
+
+- [ ] **L.2 — Add `POST /banner/ingest` dry-run mode**
+
+  **Prompt for implementer:**
+  Add `dry_run` boolean to the ingest request body. When `dry_run=true`:
+  1. Walk the `docs_path` and collect all files
+  2. For each file, call `parseMetadata()` and detect source type
+  3. For PDF files, open them and count pages using `pdf.Open()` — do NOT embed
+  4. Estimate chunks: `ceil(pages * 500 / 400)` (rough average 400 chars/page)
+  5. Return a preflight report — do NOT call Azure OpenAI or upload anything
+
+  Response shape:
+  ```json
+  {
+    "dry_run": true,
+    "files": [
+      {
+        "path": "data/docs/banner/general/releases/2026/february/Banner_General_Release_Notes_9.3.37.2.pdf",
+        "source_type": "banner",
+        "module": "General",
+        "version": "9.3.37.2",
+        "year": "2026",
+        "pages": 28,
+        "estimated_chunks": 70,
+        "estimated_seconds": 35,
+        "warnings": []
+      }
+    ],
+    "totals": {
+      "files": 1,
+      "pages": 28,
+      "estimated_chunks": 70,
+      "estimated_minutes": 1
+    }
+  }
+  ```
+
+  Warnings to include per file:
+  - `"module not detected — check folder name"` if `meta.module == ""`
+  - `"version not detected — check filename"` if `meta.version == ""` and source_type is `banner` (not user guide)
+  - `"year not detected — check folder path"` if `meta.year == ""` and source_type is `banner`
+  - `"SOP naming mismatch — file will be skipped"` if file is in `/sop/` but doesn't match SOP filename convention
+  - `"no pages extracted — may be scanned PDF"` if PDF opens but returns 0 text pages
+
+  TDD sequence:
+  1. **RED** — write tests in `internal/ingest/ingest_test.go`:
+     - `TestDryRun_ReturnsFileList_NoEmbedCalls`
+     - `TestDryRun_DetectsModuleFromPath`
+     - `TestDryRun_WarnsMissingModule`
+     - `TestDryRun_WarnsSopNamingMismatch`
+  2. **GREEN** — implement `dryRunReport()` function and wire into the handler
+  3. **REFACTOR** — extract `estimateChunks()` helper (also useful for L.3)
+
+  Run: `go test ./internal/ingest/... -v`
+
+- [ ] **L.3 — Document Agent 17 (PDF Preflight Auditor) in `wiki/CLAUDE_AGENTS.md`**
+
+  **Prompt for implementer:**
+  Append Agent 17 to `wiki/CLAUDE_AGENTS.md`. See the Agent 17 design added in this phase.
+
+  Agent 17 drives the dry-run endpoint (L.2) and cross-references with the live index to report:
+  - Files on disk that are not yet indexed
+  - Files with metadata warnings
+  - Estimated time for a full ingest of pending files
+  - Files that appear to be scanned (0 pages extracted)
+
+  The agent concludes with a ranked action list: which files to ingest first and in what order.
+
+  Add to TOC, Tool Reference table, Cost Control table, and Priority Recommendation section.
+
+- [ ] **L.4 — Update `wiki/INTERNALS.md` PDF extraction limitations**
+
+  **Prompt for implementer:**
+  In `wiki/INTERNALS.md` § Known Limitations #1 (PDF Text Extraction Quality), expand with:
+  - A concrete detection heuristic (file size per page check: <30KB/page = likely scanned)
+  - Steps to use Azure AI Document Intelligence Layout API as a pre-processing step
+  - A note that `dry_run=true` (Phase L.2) will surface scanned PDFs before a live ingest
+
+- [ ] **L.5 — Add `wiki/INGEST.md` link to `wiki/RUNBOOK.md`**
+
+  **Prompt for implementer:**
+  In `wiki/RUNBOOK.md`, add a pointer to `wiki/INGEST.md` in the "One-time setup" section:
+
+  ```markdown
+  ### 4. Ingest documents (first time only)
+  See [INGEST.md](INGEST.md) for the full reference — folder conventions, naming rules,
+  pre-ingest checklist, and time estimates.
+  ```
+
+  Also add a short "Document ingestion" entry to the troubleshooting table at the bottom
+  (if one exists) linking to INGEST.md § Troubleshooting Bad PDFs.
+
+---
+
+### Phase L Acceptance Criteria
+
+- [x] `wiki/INGEST.md` exists with all sections listed in L.1
+- [ ] `POST /banner/ingest` with `dry_run=true` returns a file list with metadata and warnings
+- [ ] Dry-run does not call Azure OpenAI or upload anything
+- [x] `wiki/CLAUDE_AGENTS.md` documents Agent 17 (PDF Preflight Auditor)
+- [x] `wiki/INTERNALS.md` Known Limitations #1 includes scanned PDF detection heuristic
+- [x] `wiki/RUNBOOK.md` links to `wiki/INGEST.md`
+- [x] `wiki/INGEST.md` is referenced from the RUNBOOK
+
+---
+
+## Phase M — Upload-Based Ingest (No Filesystem Access Required)
+
+**Goal:** Allow operators to ingest PDFs without SSH or filesystem access to the server.
+Today, all three ingest entry points require the PDF to already be on the server's disk or in
+Azure Blob Storage. In cloud deployments (Fly.io, remote Docker) this blocks any ad-hoc document
+update — adding a new Finance release note requires a full redeploy.
+
+**Core design principle:** The upload handler synthesizes the canonical folder path from the
+supplied metadata (`module`, `source_type`, `year`), writes the file there, then calls the
+existing `ingest.Run()` function. The ingest pipeline sees no difference between a manually
+placed file and an uploaded one — `parseMetadata()` still works from the path.
+
+**No adapter changes.** `POST /banner/upload` and `POST /banner/upload/from-url` are added to
+the citesearch backend only (Gin server, `internal/api/handlers.go`).
+
+---
+
+### Context: existing ingest paths
+
+| Path | Endpoint | What it requires |
+|---|---|---|
+| Folder-based | `POST /banner/ingest` | Files already in `data/docs/` on server disk |
+| Azure Blob sync | `POST /banner/blob/sync` | PDFs uploaded to Azure Blob Container separately |
+| Direct upload | `POST /banner/upload` **(Phase M.2)** | Nothing — HTTP multipart form from anywhere |
+| URL-based | `POST /banner/upload/from-url` **(Phase M.4)** | A downloadable HTTPS URL |
+
+**Blob sync limitation:** Always ingests all of `data/docs/banner/` after download, not a
+single targeted file. The upload endpoint is targeted — one file, one ingest call.
+
+---
+
+### Tasks
+
+- [x] **M.1 — Update `wiki/INGEST.md` with Upload Workflow section**
+
+  **Status:** Done by 2026-04-23 session.
+
+  Added "Upload Workflow — Ingest Without Filesystem Access" section to `wiki/INGEST.md`:
+  - Three-path comparison table (folder, blob sync, upload, URL)
+  - Path synthesis rules (how upload metadata → canonical local path)
+  - Full `POST /banner/upload` spec (fields, response, validation rules, curl examples)
+  - Full `POST /banner/upload/from-url` spec (fields, security constraints, curl example)
+  - Azure Blob as durable store design (blob path mirrors local path, re-sync from Blob)
+  - Upload workflow pre-ingest checklist
+  - Existing blob sync endpoints (for reference)
+
+- [ ] **M.2 — TDD: `POST /banner/upload` multipart handler**
+
+  **Prompt for implementer:**
+  Add `BannerUpload` handler in `internal/api/handlers.go`. Wire it in `internal/api/router.go`.
+
+  **Path synthesis rules** (implement as `synthesizeLocalPath(module, sourceType, year, filename string) string`):
+  ```go
+  switch sourceType {
+  case "banner":
+      if year != "" {
+          return filepath.Join("data/docs/banner", strings.ToLower(module), "releases", year, filename)
+      }
+      return filepath.Join("data/docs/banner", strings.ToLower(module), "releases", filename)
+  case "banner_user_guide":
+      return filepath.Join("data/docs/banner", strings.ToLower(module), "use", filename)
+  case "sop":
+      return filepath.Join("data/docs/sop", filename)
+  }
+  ```
+
+  **Handler logic:**
+  1. `r.ParseMultipartForm(100 << 20)` — 100 MB max
+  2. Read `source_type`, `module`, `version`, `year` from form fields
+  3. Validate: `source_type` required; `module` required for non-SOP; extension allowed
+  4. Synthesize destination path via `synthesizeLocalPath()`
+  5. `os.MkdirAll(filepath.Dir(destPath), 0755)`
+  6. Stream file to `destPath`
+  7. Call `ingest.Run(h.cfg, filepath.Dir(destPath), false, 10, 0, 0)` — ingest the containing folder
+  8. Return `ingest.Result` + `stored_path` + `blob_stored:false`
+  9. If `store_in_blob=true` and blob client configured: upload to Blob at mirror path after local write
+
+  **TDD sequence:**
+  1. **RED** — `internal/api/handlers_test.go` (or a new `upload_test.go`):
+     - `TestBannerUpload_MissingSourceType_Returns400`
+     - `TestBannerUpload_MissingModule_ForBanner_Returns400`
+     - `TestBannerUpload_SynthesizesCorrectPath_Banner`
+     - `TestBannerUpload_SynthesizesCorrectPath_UserGuide`
+     - `TestBannerUpload_SynthesizesCorrectPath_Sop`
+     - `TestBannerUpload_FileTooLarge_Returns400`
+     - `TestBannerUpload_UnsupportedExtension_Returns400`
+  2. **GREEN** — implement `BannerUpload` + `synthesizeLocalPath`
+  3. **REFACTOR** — extract `synthesizeLocalPath` to `internal/ingest/path.go` so it can be
+     unit tested in isolation and reused by the dry-run handler (Phase L.2)
+
+  Run: `go test ./internal/api/... -v`
+
+- [ ] **M.3 — TDD: `store_in_blob=true` mirrors upload to Azure Blob**
+
+  **Prompt for implementer:**
+  Extend `BannerUpload` to conditionally upload the saved file to Azure Blob Storage.
+  The Blob path must mirror the local path (strip the `data/docs/` prefix).
+
+  ```go
+  // blobPath strips the "data/docs/" prefix from the local path.
+  // "data/docs/banner/finance/releases/2026/foo.pdf" → "banner/finance/releases/2026/foo.pdf"
+  func blobPath(localPath string) string {
+      return strings.TrimPrefix(localPath, "data/docs/")
+  }
+  ```
+
+  Add `UploadBlob(ctx, blobName, filePath string) error` method to `azure.BlobClient`.
+
+  TDD:
+  - `TestBlobPath_StripsPrefixCorrectly` — unit test for `blobPath()`
+  - `TestBannerUpload_StoredInBlob_WhenFlagTrue` — httptest with a mock blob client
+  - `TestBannerUpload_BlobSkipped_WhenFlagFalse` — assert blob client never called
+
+  Run: `go test ./internal/api/... -v` and `go test ./internal/azure/... -v`
+
+- [ ] **M.4 — TDD: `POST /banner/upload/from-url` with SSRF protection**
+
+  **Prompt for implementer:**
+  Add `BannerUploadFromURL` handler in `internal/api/handlers.go`.
+
+  **SSRF protection:**
+  ```go
+  var defaultURLAllowlist = []string{"ellucian.com", "customercare.ellucian.com"}
+
+  func isAllowedURL(rawURL, allowlistEnv string) error {
+      u, err := url.Parse(rawURL)
+      if err != nil { return fmt.Errorf("invalid URL") }
+      if u.Scheme != "https" { return fmt.Errorf("only HTTPS URLs are allowed") }
+      allowlist := defaultURLAllowlist
+      if allowlistEnv == "*" { return nil }
+      if allowlistEnv != "" { allowlist = strings.Split(allowlistEnv, ",") }
+      for _, allowed := range allowlist {
+          if strings.HasSuffix(u.Hostname(), allowed) { return nil }
+      }
+      return fmt.Errorf("URL hostname %q is not in the allowed list", u.Hostname())
+  }
+  ```
+
+  Handler logic:
+  1. Decode JSON body: `url`, `source_type`, `module`, `version`, `year`, `store_in_blob`
+  2. Validate URL via `isAllowedURL(url, os.Getenv("UPLOAD_URL_ALLOWLIST"))`
+  3. HTTP GET with 60s timeout and 100 MB size limit
+  4. Extract filename from URL path; apply version to filename if `version` provided
+  5. Synthesize local path, write file, ingest (same as M.2)
+  6. If `store_in_blob=true`: upload to Blob
+
+  TDD:
+  - `TestBannerUploadFromURL_HTTPURLRejected_Returns400`
+  - `TestBannerUploadFromURL_DisallowedHostname_Returns400`
+  - `TestBannerUploadFromURL_AllowlistWildcard_AllowsAnyHTTPS`
+  - `TestBannerUploadFromURL_DownloadsAndIngests_Success` (httptest server for download)
+  - `TestIsAllowedURL_*` — table-driven unit tests for `isAllowedURL`
+
+  Run: `go test ./internal/api/... -v`
+
+- [ ] **M.5 — Document Agent 18 (Document Upload Coordinator) in `wiki/CLAUDE_AGENTS.md`**
+
+  **Prompt for implementer:**
+  Append Agent 18 to `wiki/CLAUDE_AGENTS.md`. See the Agent 18 design added in this phase.
+
+  Agent 18 is a conversational upload agent: it asks the operator what they want to add,
+  determines the correct metadata (module, source_type, version, year) from context,
+  drives the upload, and verifies the result with a test query.
+
+  Add to TOC, Tool Reference table, Cost Control table, and Priority Recommendation.
+
+- [ ] **M.6 — Update `CLAUDE.md` with new upload endpoints**
+
+  **Prompt for implementer:**
+  In `CLAUDE.md` § Backend API, add:
+  ```
+  POST /banner/upload          { file (multipart), source_type, module, version?, year?, store_in_blob? }
+  POST /banner/upload/from-url { url, source_type, module, version?, year?, store_in_blob? }
+  Returns ingest.Result + stored_path + blob_stored
+  NOTE: module must match a known module name; user_guide sources never set version/year
+  SSRF protection: UPLOAD_URL_ALLOWLIST env var (default: ellucian.com domains only)
+  ```
+
+  Add env var documentation:
+  ```
+  UPLOAD_URL_ALLOWLIST   comma-separated HTTPS hostnames allowed for from-url ingest (default: ellucian.com)
+  MAX_UPLOAD_SIZE_MB     max multipart upload file size in MB (default: 100)
+  ```
+
+---
+
+### Phase M Acceptance Criteria
+
+- [x] `wiki/INGEST.md` § Upload Workflow covers both new endpoints
+- [ ] `POST /banner/upload` multipart form → file saved to synthesized path → ingested
+- [ ] `POST /banner/upload` with missing `source_type` → 400
+- [ ] `POST /banner/upload` with banner source + missing `module` → 400
+- [ ] `POST /banner/upload` synthesizes correct path for banner / user_guide / sop
+- [ ] `POST /banner/upload/from-url` with HTTP URL → 400
+- [ ] `POST /banner/upload/from-url` with disallowed hostname → 400
+- [ ] `POST /banner/upload/from-url` with `UPLOAD_URL_ALLOWLIST=*` → allowed for any HTTPS
+- [ ] `store_in_blob=true` with configured Blob client → file mirrored in Blob at `blobPath(localPath)`
+- [ ] `go test ./... -v` passes
+- [ ] `go build ./...` succeeds
+- [ ] `wiki/CLAUDE_AGENTS.md` documents Agent 18
+
+---

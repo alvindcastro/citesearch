@@ -11,6 +11,7 @@ import (
 	"crypto/md5"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -31,6 +32,39 @@ type Result struct {
 	Message            string `json:"message"`
 }
 
+// DryRunFile summarises one file in a preflight report.
+type DryRunFile struct {
+	Path             string   `json:"path"`
+	SourceType       string   `json:"source_type"`
+	Module           string   `json:"module"`
+	Version          string   `json:"version"`
+	Year             string   `json:"year"`
+	Pages            int      `json:"pages"`
+	EstimatedChunks  int      `json:"estimated_chunks"`
+	EstimatedSeconds int      `json:"estimated_seconds"`
+	Warnings         []string `json:"warnings"`
+}
+
+// DryRunTotals aggregates the preflight report totals.
+type DryRunTotals struct {
+	Files            int `json:"files"`
+	Pages            int `json:"pages"`
+	EstimatedChunks  int `json:"estimated_chunks"`
+	EstimatedMinutes int `json:"estimated_minutes"`
+}
+
+// DryRunResult is returned by the ingest preflight endpoint.
+type DryRunResult struct {
+	DryRun bool         `json:"dry_run"`
+	Files  []DryRunFile `json:"files"`
+	Totals DryRunTotals `json:"totals"`
+}
+
+// DryRunReport walks docsPath and returns a preflight ingest report without Azure calls.
+func DryRunReport(docsPath string) (*DryRunResult, error) {
+	return dryRunReport(docsPath)
+}
+
 // Run walks docsPath, ingests every supported file, and returns a summary.
 func Run(cfg *config.Config, docsPath string, overwrite bool, pagesPerBatch int, startPage int, endPage int) (*Result, error) {
 	openai := azure.NewOpenAIClient(cfg)
@@ -49,18 +83,7 @@ func Run(cfg *config.Config, docsPath string, overwrite bool, pagesPerBatch int,
 		pagesPerBatch = 10
 	}
 
-	// Collect supported files
-	supported := map[string]bool{".pdf": true, ".txt": true, ".md": true, ".docx": true}
-	var files []string
-	err := filepath.Walk(docsPath, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		if !info.IsDir() && supported[strings.ToLower(filepath.Ext(path))] {
-			files = append(files, path)
-		}
-		return nil
-	})
+	files, err := collectSupportedFiles(docsPath)
 	if err != nil {
 		return nil, fmt.Errorf("walk docs path: %w", err)
 	}
@@ -110,6 +133,176 @@ func Run(cfg *config.Config, docsPath string, overwrite bool, pagesPerBatch int,
 			docsProcessed, totalChunks, cfg.AzureSearchIndexName,
 		),
 	}, nil
+}
+
+func dryRunReport(docsPath string) (*DryRunResult, error) {
+	files, err := collectSupportedFiles(docsPath)
+	if err != nil {
+		return nil, fmt.Errorf("walk docs path: %w", err)
+	}
+
+	report := &DryRunResult{
+		DryRun: true,
+		Files:  make([]DryRunFile, 0, len(files)),
+	}
+
+	totalSeconds := 0
+	for _, filePath := range files {
+		fileReport, err := inspectFileForDryRun(filePath)
+		if err != nil {
+			return nil, err
+		}
+
+		report.Files = append(report.Files, fileReport)
+		report.Totals.Files++
+		report.Totals.Pages += fileReport.Pages
+		report.Totals.EstimatedChunks += fileReport.EstimatedChunks
+		totalSeconds += fileReport.EstimatedSeconds
+	}
+
+	report.Totals.EstimatedMinutes = estimateMinutes(totalSeconds)
+	return report, nil
+}
+
+func collectSupportedFiles(docsPath string) ([]string, error) {
+	supported := map[string]bool{".pdf": true, ".txt": true, ".md": true, ".docx": true}
+	var files []string
+
+	err := filepath.Walk(docsPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if !info.IsDir() && supported[strings.ToLower(filepath.Ext(path))] {
+			files = append(files, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return files, nil
+}
+
+func inspectFileForDryRun(filePath string) (DryRunFile, error) {
+	sourceType := detectSourceType(filePath)
+	meta := parseMetadata(filePath)
+
+	pages, textPages, err := inspectPages(filePath)
+	if err != nil {
+		return DryRunFile{}, fmt.Errorf("inspect %s: %w", filepath.Base(filePath), err)
+	}
+
+	report := DryRunFile{
+		Path:             filePath,
+		SourceType:       sourceType,
+		Module:           meta.module,
+		Version:          meta.version,
+		Year:             meta.year,
+		Pages:            pages,
+		EstimatedChunks:  estimateChunks(pages),
+		EstimatedSeconds: estimateSeconds(estimateChunks(pages)),
+		Warnings:         buildDryRunWarnings(filePath, sourceType, meta, pages, textPages),
+	}
+
+	return report, nil
+}
+
+func detectSourceType(filePath string) string {
+	if isSopDocument(filePath) {
+		return azure.SourceTypeSOP
+	}
+	if isUserGuideDocument(filePath) {
+		return azure.SourceTypeBannerGuide
+	}
+	return azure.SourceTypeBanner
+}
+
+func inspectPages(filePath string) (pages int, textPages int, err error) {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".pdf":
+		return inspectPDF(filePath)
+	case ".txt", ".md":
+		extracted, err := extractTextFile(filePath)
+		if err != nil {
+			return 0, 0, err
+		}
+		if len(extracted) == 0 {
+			return 0, 0, nil
+		}
+		return 1, len(extracted), nil
+	default:
+		return 0, 0, nil
+	}
+}
+
+func inspectPDF(filePath string) (pages int, textPages int, err error) {
+	f, r, err := pdf.Open(filePath)
+	if err != nil {
+		return 0, 0, fmt.Errorf("open pdf: %w", err)
+	}
+	defer f.Close()
+
+	pages = r.NumPage()
+	for i := 1; i <= pages; i++ {
+		page := r.Page(i)
+		if page.V.IsNull() {
+			continue
+		}
+
+		text, err := page.GetPlainText(nil)
+		if err != nil {
+			continue
+		}
+		if sanitizeText(text) != "" {
+			textPages++
+		}
+	}
+
+	return pages, textPages, nil
+}
+
+func buildDryRunWarnings(filePath, sourceType string, meta docMetadata, pages, textPages int) []string {
+	var warnings []string
+
+	if sourceType != azure.SourceTypeSOP && meta.module == "" {
+		warnings = append(warnings, "module not detected — check folder name")
+	}
+	if sourceType == azure.SourceTypeBanner && meta.version == "" {
+		warnings = append(warnings, "version not detected — check filename")
+	}
+	if sourceType == azure.SourceTypeBanner && meta.year == "" {
+		warnings = append(warnings, "year not detected — check folder path")
+	}
+	if sourceType == azure.SourceTypeSOP && parseSopFilename(filePath).number == "" {
+		warnings = append(warnings, "SOP naming mismatch — file will be skipped")
+	}
+	if strings.EqualFold(filepath.Ext(filePath), ".pdf") && pages > 0 && textPages == 0 {
+		warnings = append(warnings, "no pages extracted — may be scanned PDF")
+	}
+
+	return warnings
+}
+
+func estimateChunks(pages int) int {
+	if pages <= 0 {
+		return 0
+	}
+	return int(math.Ceil(float64(pages*500) / 400.0))
+}
+
+func estimateSeconds(chunks int) int {
+	if chunks <= 0 {
+		return 0
+	}
+	return int(math.Ceil(float64(chunks) / 2.0))
+}
+
+func estimateMinutes(seconds int) int {
+	if seconds <= 0 {
+		return 0
+	}
+	return int(math.Ceil(float64(seconds) / 60.0))
 }
 
 // ─── File Processing ──────────────────────────────────────────────────────────

@@ -90,3 +90,23 @@ func TestIsSopDocument(t *testing.T) {
 		})
 	}
 }
+
+func TestIsUserGuideDocument(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"data/docs/banner/general/use/Banner General - Use - Ellucian.pdf", true},
+		{`data\docs\banner\student\use\Banner Student - Use - Ellucian.pdf`, true},
+		{"data/docs/banner/general/releases/2026/Banner_General_Release_Notes_9.3.37.2.pdf", false},
+		{"data/docs/banner/use-archive/file.pdf", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isUserGuideDocument(tt.path); got != tt.want {
+				t.Errorf("isUserGuideDocument(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
