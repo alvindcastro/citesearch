@@ -85,7 +85,7 @@ flow.
   "status": "partial",
   "chunking_pattern": "sparse",
   "gap_count": 3,
-  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (101 pages total unchunked)"
+  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (95 pages total unchunked)"
 }
 ```
 
@@ -337,9 +337,9 @@ Read the current sidecar state. Does not modify anything.
   "status": "partial",
   "chunking_pattern": "sparse",
   "gap_count": 3,
-  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (101 pages total unchunked)",
-  "queryable_page_count": 19,
-  "remaining_page_count": 101,
+  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (95 pages total unchunked)",
+  "queryable_page_count": 25,
+  "remaining_page_count": 95,
   "estimated_remaining_minutes": 7
 }
 ```
@@ -373,9 +373,9 @@ List all tracked uploads. Returns sidecar summaries for all documents.
     "status": "partial",
     "chunking_pattern": "sparse",
     "total_pages": 480,
-    "queryable_page_count": 57,
+    "queryable_page_count": 25,
     "gap_count": 3,
-    "gap_summary": "3 gaps: pages 1-32, 45-77, 91-480 (444 pages total unchunked)"
+    "gap_summary": "3 gaps: pages 1-32, 45-77, 91-480 (455 pages total unchunked)"
   }
 ]
 ```
@@ -548,8 +548,8 @@ After the second call (`page_start=78, page_end=90`):
   ],
   "chunking_pattern": "sparse",
   "gap_count": 3,
-  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (101 pages total unchunked)",
-  "queryable_page_count": 19
+  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (95 pages total unchunked)",
+  "queryable_page_count": 25
 }
 ```
 

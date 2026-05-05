@@ -787,7 +787,7 @@ If an upload or download fails, no sidecar is created.
   "status": "partial",
   "chunking_pattern": "sparse",
   "gap_count": 3,
-  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (101 pages total unchunked)"
+  "gap_summary": "3 gaps: pages 1-32, 45-77, 91-120 (95 pages total unchunked)"
 }
 ```
 

@@ -99,10 +99,10 @@ Acceptance criteria:
 
 ## Phase U.2 - Sidecar Range Math
 
-- [ ] Implement unchunked-range computation from `total_pages` and `chunked_ranges`.
-- [ ] Implement overlap detection.
-- [ ] Implement chunking-pattern classification: `none`, `sequential`, `contiguous`, `sparse`.
-- [ ] Implement `status`, `gap_count`, `gap_summary`, `queryable_page_count`, and
+- [x] Implement unchunked-range computation from `total_pages` and `chunked_ranges`.
+- [x] Implement overlap detection.
+- [x] Implement chunking-pattern classification: `none`, `sequential`, `contiguous`, `sparse`.
+- [x] Implement `status`, `gap_count`, `gap_summary`, `queryable_page_count`, and
       `remaining_page_count` derivation.
 
 Prompt for implementer:
@@ -115,29 +115,29 @@ adjacent ranges, out-of-order ranges, and invalid ranges. Do not add HTTP handle
 
 Red tests:
 
-- [ ] `TestComputeUnchunkedRanges_NoneChunked`
-- [ ] `TestComputeUnchunkedRanges_SequentialPrefix`
-- [ ] `TestComputeUnchunkedRanges_ContiguousMiddle`
-- [ ] `TestComputeUnchunkedRanges_Sparse`
-- [ ] `TestCheckOverlap_DetectsContainmentPartialAndDuplicate`
-- [ ] `TestComputePattern_NoneSequentialContiguousSparse`
-- [ ] `TestGapSummary_FormatsSingleMultipleAndFullyIndexed`
+- [x] `TestComputeUnchunkedRanges_NoneChunked`
+- [x] `TestComputeUnchunkedRanges_SequentialPrefix`
+- [x] `TestComputeUnchunkedRanges_ContiguousMiddle`
+- [x] `TestComputeUnchunkedRanges_Sparse`
+- [x] `TestCheckOverlap_DetectsContainmentPartialAndDuplicate`
+- [x] `TestComputePattern_NoneSequentialContiguousSparse`
+- [x] `TestGapSummary_FormatsSingleMultipleAndFullyIndexed`
 
 Green tasks:
 
-- [ ] Sort and merge ranges defensively before computing gaps.
-- [ ] Reject invalid requested ranges where `start < 1`, `end < start`, or `end > total_pages`.
-- [ ] Recompute all derived fields from source state instead of trusting caller-supplied values.
+- [x] Sort and merge ranges defensively before computing gaps.
+- [x] Reject invalid requested ranges where `start < 1`, `end < start`, or `end > total_pages`.
+- [x] Recompute all derived fields from source state instead of trusting caller-supplied values.
 
 Refactor tasks:
 
-- [ ] Keep range math pure and independent from Blob, Gin, and Azure Search.
-- [ ] Use table-driven tests for readability.
+- [x] Keep range math pure and independent from Blob, Gin, and Azure Search.
+- [x] Use table-driven tests for readability.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/upload/... -run 'Range|Overlap|Pattern|Gap' -v` passes.
-- [ ] The examples in `PDF_UPLOAD_FLOW.md` are represented by tests.
+- [x] `go test ./internal/upload/... -run 'Range|Overlap|Pattern|Gap' -v` passes.
+- [x] The examples in `PDF_UPLOAD_FLOW.md` are represented by tests.
 
 ## Phase U.3 - Blob Primitives and Sidecar Persistence
 
