@@ -611,6 +611,18 @@ the sidecar. Useful for Ellucian Customer Center (ECC) download links in automat
 - Download timeout: 60 seconds
 - File size limit: 100 MB (same as multipart upload)
 - File extension validated after download (must be `.pdf`)
+- `source_type=sop`, DOCX, TXT, and Markdown uploads are rejected before Blob or sidecar writes
+
+**Errors:**
+
+| Code | Cause |
+|---|---|
+| 400 | HTTP URL, disallowed hostname, missing metadata, unknown module, non-PDF download, unsupported source type, or `banner_user_guide` with `version`/`year`. |
+| 404 | Remote URL returned 404. |
+| 408 | Download timed out. |
+| 409 | A PDF already exists at the synthesized blob path. |
+| 413 | Downloaded file exceeds `MAX_UPLOAD_SIZE_MB`. |
+| 502 | Remote server returned a 5xx error. |
 
 **Example curl:**
 ```bash

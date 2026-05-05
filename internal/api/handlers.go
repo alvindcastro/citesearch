@@ -416,15 +416,66 @@ func (h *Handler) BannerUpload(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// BannerUploadFromURL godoc
+//
+//	@Summary	Download a Banner PDF from an allowlisted HTTPS URL without chunking
+//	@Tags		banner
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		upload.URLUploadRequest	true	"URL upload metadata"
+//	@Success	200		{object}	upload.UploadResponse
+//	@Failure	400		{object}	map[string]string
+//	@Failure	404		{object}	map[string]string
+//	@Failure	408		{object}	map[string]string
+//	@Failure	409		{object}	map[string]string
+//	@Failure	413		{object}	map[string]string
+//	@Failure	502		{object}	map[string]string
+//	@Router		/banner/upload/from-url [post]
+func (h *Handler) BannerUploadFromURL(c *gin.Context) {
+	var req upload.URLUploadRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	service := h.uploadService
+	if service == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "AZURE_STORAGE_CONNECTION_STRING is not configured"})
+		return
+	}
+
+	resp, err := service.CreateUploadFromURL(
+		c.Request.Context(),
+		req,
+		upload.SplitURLAllowlist(h.cfg.UploadURLAllowlist),
+		h.cfg.MaxUploadSizeMB,
+	)
+	if err != nil {
+		writeUploadError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func writeUploadError(c *gin.Context, err error) {
 	switch {
-	case errors.Is(err, upload.ErrUploadTooLarge):
+	case errors.Is(err, upload.ErrUploadTooLarge), errors.Is(err, upload.ErrDownloadTooLarge):
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrDuplicateBlob):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrDownloadNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrDownloadTimeout):
+		c.JSON(http.StatusRequestTimeout, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrDownloadRemoteServer):
+		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrMissingSourceType),
 		errors.Is(err, upload.ErrUnsupportedSourceType),
 		errors.Is(err, upload.ErrSOPUploadUnsupported),
+		errors.Is(err, upload.ErrMissingURL),
+		errors.Is(err, upload.ErrInvalidURL),
+		errors.Is(err, upload.ErrURLRequiresHTTPS),
+		errors.Is(err, upload.ErrURLHostnameNotAllowed),
 		errors.Is(err, upload.ErrMissingModule),
 		errors.Is(err, upload.ErrUnknownModule),
 		errors.Is(err, upload.ErrMissingVersion),
@@ -449,11 +500,12 @@ func newUploadService(cfg *config.Config) *upload.Service {
 		return nil
 	}
 	return upload.NewService(upload.Dependencies{
-		BlobStore:    blobClient,
-		PageCounter:  ingestPageCounter{},
-		Clock:        systemClock{},
-		IDGenerator:  randomIDGenerator{},
-		IngestRunner: nil,
+		BlobStore:      blobClient,
+		PageCounter:    ingestPageCounter{},
+		Clock:          systemClock{},
+		IDGenerator:    randomIDGenerator{},
+		IngestRunner:   nil,
+		HTTPDownloader: upload.NewBoundedHTTPDownloader(upload.DefaultDownloadTimeout),
 	})
 }
 

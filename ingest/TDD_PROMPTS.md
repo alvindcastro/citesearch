@@ -278,11 +278,11 @@ Acceptance criteria:
 
 ## Phase U.6 - URL Upload Endpoint with SSRF Protection
 
-- [ ] Add `POST /banner/upload/from-url`.
-- [ ] Enforce HTTPS.
-- [ ] Enforce hostname allowlist with default Ellucian domains.
-- [ ] Enforce timeout and max downloaded size.
-- [ ] Create the same Blob and sidecar state as multipart upload.
+- [x] Add `POST /banner/upload/from-url`.
+- [x] Enforce HTTPS.
+- [x] Enforce hostname allowlist with default Ellucian domains.
+- [x] Enforce timeout and max downloaded size.
+- [x] Create the same Blob and sidecar state as multipart upload.
 
 Prompt for implementer:
 
@@ -295,36 +295,36 @@ prove non-PDF downloads and `source_type=sop` are rejected before any Blob write
 
 Red tests:
 
-- [ ] `TestIsAllowedURL_RejectsHTTP`
-- [ ] `TestIsAllowedURL_RejectsDisallowedHostname`
-- [ ] `TestIsAllowedURL_AllowsDefaultEllucianDomains`
-- [ ] `TestIsAllowedURL_AllowsWildcardOnlyForHTTPS`
-- [ ] `TestBannerUploadFromURL_Remote404Returns404`
-- [ ] `TestBannerUploadFromURL_Remote5xxReturns502`
-- [ ] `TestBannerUploadFromURL_TimeoutReturns408`
-- [ ] `TestBannerUploadFromURL_TooLargeReturns413`
-- [ ] `TestBannerUploadFromURL_NonPDFDownloadReturns400`
-- [ ] `TestBannerUploadFromURL_SOPSourceTypeReturns400`
-- [ ] `TestBannerUploadFromURL_CreatesBlobAndSidecar`
-- [ ] `TestBannerUploadFromURL_DoesNotCallIngest`
+- [x] `TestIsAllowedURL_RejectsHTTP`
+- [x] `TestIsAllowedURL_RejectsDisallowedHostname`
+- [x] `TestIsAllowedURL_AllowsDefaultEllucianDomains`
+- [x] `TestIsAllowedURL_AllowsWildcardOnlyForHTTPS`
+- [x] `TestBannerUploadFromURL_Remote404Returns404`
+- [x] `TestBannerUploadFromURL_Remote5xxReturns502`
+- [x] `TestBannerUploadFromURL_TimeoutReturns408`
+- [x] `TestBannerUploadFromURL_TooLargeReturns413`
+- [x] `TestBannerUploadFromURL_NonPDFDownloadReturns400`
+- [x] `TestBannerUploadFromURL_SOPSourceTypeReturns400`
+- [x] `TestBannerUploadFromURL_CreatesBlobAndSidecar`
+- [x] `TestBannerUploadFromURL_DoesNotCallIngest`
 
 Green tasks:
 
-- [ ] Add `UPLOAD_URL_ALLOWLIST` config with default `customercare.ellucian.com,ellucian.com`.
-- [ ] Add bounded download helper.
-- [ ] Reuse upload service from multipart path after download.
-- [ ] Validate final extension from downloaded filename/path.
+- [x] Add `UPLOAD_URL_ALLOWLIST` config with default `customercare.ellucian.com,ellucian.com`.
+- [x] Add bounded download helper.
+- [x] Reuse upload service from multipart path after download.
+- [x] Validate final extension from downloaded filename/path.
 
 Refactor tasks:
 
-- [ ] Keep SSRF validation pure and table-tested.
-- [ ] Keep remote status mapping documented and stable.
+- [x] Keep SSRF validation pure and table-tested.
+- [x] Keep remote status mapping documented and stable.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/api/... -run 'UploadFromURL|AllowedURL' -v` passes.
-- [ ] No handler test uses the public internet.
-- [ ] Failed downloads do not create sidecars.
+- [x] `go test ./internal/api/... -run 'UploadFromURL|AllowedURL' -v` passes.
+- [x] No handler test uses the public internet.
+- [x] Failed downloads do not create sidecars.
 
 ## Phase U.7 - Chunk Uploaded Pages
 

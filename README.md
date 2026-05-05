@@ -232,6 +232,7 @@ TOP_K_DEFAULT=5
 API_PORT=8000
 GRPC_PORT=9000
 MAX_UPLOAD_SIZE_MB=100
+UPLOAD_URL_ALLOWLIST=customercare.ellucian.com,ellucian.com
 ```
 
 ---

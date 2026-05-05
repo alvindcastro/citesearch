@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -97,6 +98,96 @@ func (s *Service) CreateUploadFromFile(ctx context.Context, req UploadRequest, l
 		GapSummary:      derived.GapSummary,
 		Message:         uploadSuccessMessage,
 	}, nil
+}
+
+func (s *Service) CreateUploadFromURL(ctx context.Context, req URLUploadRequest, allowlist []string, maxUploadSizeMB int) (UploadResponse, error) {
+	if strings.TrimSpace(req.URL) == "" {
+		return UploadResponse{}, ErrMissingURL
+	}
+	if err := IsAllowedURL(req.URL, allowlist); err != nil {
+		return UploadResponse{}, err
+	}
+
+	initialFilename := filenameFromURL(req.URL)
+	initialReq := UploadRequest{
+		SourceType: req.SourceType,
+		Module:     req.Module,
+		Version:    req.Version,
+		Year:       req.Year,
+		Filename:   initialFilename,
+	}
+	if _, err := ValidateUploadMetadata(initialReq, maxUploadSizeMB); err != nil {
+		return UploadResponse{}, err
+	}
+	if s.deps.HTTPDownloader == nil {
+		return UploadResponse{}, errors.New("HTTP downloader is not configured")
+	}
+
+	maxBytes := int64(0)
+	if maxUploadSizeMB > 0 {
+		maxBytes = int64(maxUploadSizeMB) * 1024 * 1024
+	}
+	result, err := s.deps.HTTPDownloader.Download(ctx, req.URL, maxBytes)
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	if result.Body == nil {
+		return UploadResponse{}, io.ErrUnexpectedEOF
+	}
+	defer result.Body.Close()
+
+	filename := strings.TrimSpace(result.Filename)
+	if filename == "" {
+		filename = initialFilename
+	}
+	uploadReq := UploadRequest{
+		SourceType: req.SourceType,
+		Module:     req.Module,
+		Version:    req.Version,
+		Year:       req.Year,
+		Filename:   filename,
+		SizeBytes:  result.SizeBytes,
+	}
+	if _, err := ValidateUploadMetadata(uploadReq, maxUploadSizeMB); err != nil {
+		return UploadResponse{}, err
+	}
+
+	tempFile, err := os.CreateTemp("", "banner-upload-url-*"+strings.ToLower(filepath.Ext(filename)))
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	tempPath := tempFile.Name()
+	defer os.Remove(tempPath)
+
+	written, err := copyUploadBody(tempFile, result.Body, maxBytes)
+	closeErr := tempFile.Close()
+	if err != nil {
+		return UploadResponse{}, err
+	}
+	if closeErr != nil {
+		return UploadResponse{}, closeErr
+	}
+	uploadReq.SizeBytes = written
+	if _, err := ValidateUploadMetadata(uploadReq, maxUploadSizeMB); err != nil {
+		return UploadResponse{}, err
+	}
+
+	return s.CreateUploadFromFile(ctx, uploadReq, tempPath, maxUploadSizeMB)
+}
+
+func copyUploadBody(dest io.Writer, src io.Reader, maxBytes int64) (int64, error) {
+	var reader io.Reader = src
+	if maxBytes > 0 {
+		reader = io.LimitReader(src, maxBytes+1)
+	}
+	written, err := io.Copy(dest, reader)
+	if err != nil {
+		return written, err
+	}
+	if maxBytes > 0 && written > maxBytes {
+		return written, ErrDownloadTooLarge
+	}
+	return written, nil
 }
 
 func (s *Service) WriteSidecar(ctx context.Context, state SidecarState) error {

@@ -161,8 +161,9 @@ POST /banner/upload         → internal/api/handlers.go → BannerUpload()
                               Writes PDF to Blob, extracts page count, creates sidecar JSON blob.
                               Does NOT call ingest.Run().
 
-POST /banner/upload/from-url → internal/upload/handler.go → UploadFromURL()
-                              Downloads PDF from HTTPS URL, then same as UploadPDF().
+POST /banner/upload/from-url → internal/api/handlers.go → BannerUploadFromURL()
+                              internal/upload/service.go → CreateUploadFromURL()
+                              Downloads PDF from allowlisted HTTPS URL, then same as CreateUploadFromFile().
 
 POST /banner/upload/chunk   → internal/upload/handler.go → ChunkPages()
                               Reads sidecar, downloads PDF from Blob for the requested page range,

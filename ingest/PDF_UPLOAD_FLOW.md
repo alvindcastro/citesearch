@@ -229,6 +229,7 @@ unchanged. Does not chunk.
 - Download timeout: 60 seconds.
 - File size limit: same as multipart upload (`MAX_UPLOAD_SIZE_MB`, default 100 MB).
 - File extension validated after download — must be `.pdf`.
+- `source_type=sop`, DOCX, TXT, and Markdown uploads are rejected before Blob or sidecar writes.
 
 **Response:** identical shape to `POST /banner/upload`. `uploaded_at` reflects when the
 download completed. If the download fails, no sidecar is created.
