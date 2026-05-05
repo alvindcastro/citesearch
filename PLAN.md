@@ -2290,7 +2290,7 @@ citesearch backend only, not the adapter.
 
   Run: `go test ./internal/ingest/... -v`
 
-- [ ] **L.3 — Document Agent 17 (PDF Preflight Auditor) in `wiki/CLAUDE_AGENTS.md`**
+- [x] **L.3 — Document Agent 17 (PDF Preflight Auditor) in `wiki/CLAUDE_AGENTS.md`**
 
   **Prompt for implementer:**
   Append Agent 17 to `wiki/CLAUDE_AGENTS.md`. See the Agent 17 design added in this phase.
