@@ -80,8 +80,8 @@ config/              → Loads env vars once. No logic. Panics if required vars 
 internal/azure/      → Thin HTTP clients for Azure services only: OpenAI, AI Search, Blob Storage.
 internal/websearch/  → Web search clients: Bing and Tavily. WebSearcher interface lives here.
 internal/ingest/     → Document pipeline: walk files → extract text → chunk → embed → upload to Search.
-internal/upload/     → Phase M upload/chunk handlers: Blob Storage write, sidecar CRUD, chunk dispatch.
-                        Calls ingest.Run() internally — no changes to the ingest pipeline itself.
+internal/upload/     → Phase U upload/chunk services: sidecar range math, sidecar CRUD, chunk dispatch.
+                        Depends on explicit seams for Blob Storage and ingest execution.
 internal/rag/        → Query pipeline: embed question → hybrid search → build prompt → chat.
 internal/api/        → HTTP handlers and Gin router. Handlers are thin — delegate to rag/ingest/upload.
 internal/grpcserver/ → gRPC handlers. Scaffolded, not fully implemented.
@@ -153,7 +153,7 @@ Run(docsPath, overwrite, pagesPerBatch, startPage, endPage)
 
 ## Data Flow: RAG Query Pipeline
 
-**Phase M entry points (upload/chunk path):**
+**Phase U entry points (upload/chunk path):**
 
 ```
 POST /banner/upload         → internal/upload/handler.go → UploadPDF()
@@ -660,9 +660,9 @@ try to build the gRPC server without running `buf generate` first, it will fail 
 grpcserver package imports anything from `gen/go/`. Currently the imports are commented out to
 prevent this.
 
-### 8. Phase M Sidecar Is the Only Persistent Upload State
+### 8. Phase U Sidecar Is the Only Persistent Upload State
 
-The Phase M upload/chunk path stores all state in a sidecar JSON blob adjacent to the PDF in
+The Phase U upload/chunk path stores all state in a sidecar JSON blob adjacent to the PDF in
 Blob Storage. There is no database, no queue, no job tracker. This means:
 
 - If the sidecar blob is deleted or corrupted, the chunking state for that document is lost.
@@ -677,7 +677,7 @@ Blob Storage. There is no database, no queue, no job tracker. This means:
   prevent duplicates via Azure Search's merge-or-upload
   semantics.
 
-### 9. `ingest.CountPages()` Is Required for Phase M Upload
+### 9. `ingest.CountPages()` Is Required for Phase U Upload
 
 `POST /banner/upload` needs the total page count at upload time to initialise the sidecar.
 This requires a new `ingest.CountPages(filePath string) (int, error)` function that reads a
@@ -761,14 +761,15 @@ This is the highest-impact UX improvement for the ask endpoints.
 ---
 
 
-### Add the Phase M Upload/Chunk Handler
+### Add the Phase U Upload/Chunk Handler
 
 The upload/chunk path is a separate handler layer that wraps the existing `ingest.Run()`.
 No changes to the ingest pipeline are required.
 
 1. Create `internal/upload/` package with:
-   - `sidecar.go` — `SidecarState` struct, `ReadSidecar()`, `WriteSidecar()`, `ComputeUnchunked()`,
-     `CheckOverlap()`, `ComputePattern()`, `ComputeGapSummary()`
+   - `types.go`, `service.go`, `range_math.go` — `SidecarState`, `ReadSidecar()`,
+     `WriteSidecar()`, `SidecarPath()`, `ListUploads()`, `ComputeUnchunkedRanges()`,
+     `CheckOverlap()`, `ComputePattern()`, `GapSummary()`
    - `handler.go` — `UploadPDF()`, `UploadFromURL()`, `ChunkPages()`, `ChunkingStatus()`,
      `ListUploads()`, `DeleteUpload()`
 
@@ -821,10 +822,9 @@ No changes to the ingest pipeline are required.
 - HTTP handlers — could be unit tested with `httptest.NewRecorder()` but would need Azure mocks
 - End-to-end ingestion — requires a real file system + Azure Search index
 
-**Phase M upload/chunk — additional gaps:**
-- `internal/upload/sidecar.go` — `ComputeUnchunked()`, `CheckOverlap()`, `ComputePattern()`, and
-  `ComputeGapSummary()` are pure functions with no I/O and are directly unit testable without mocks.
-  These should be the first tests written for Phase M.
+**Phase U upload/chunk — additional gaps:**
+- `internal/upload/range_math.go` and `internal/upload/service.go` cover the pure sidecar math and
+  sidecar persistence helpers. They are unit tested with fake Blob storage.
 - `internal/upload/handler.go` — `UploadPDF()` and `ChunkPages()` require both Blob Storage and
   the ingest pipeline. Unit test with a mock `BlobClient` interface and a stubbed `ingest.Run()`.
 - Sidecar atomic write — test that a simulated failure mid-gap leaves the sidecar in a valid state

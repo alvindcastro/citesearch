@@ -4,14 +4,21 @@
 package azure
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
+	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob/blob"
 )
 
 // BlobClient wraps Azure Blob Storage operations.
@@ -41,9 +48,10 @@ type BlobInfo struct {
 
 // ListDocuments lists all PDFs/text files in the container (with optional prefix).
 func (b *BlobClient) ListDocuments(prefix string) ([]BlobInfo, error) {
-	ctx := context.Background()
-	supported := map[string]bool{".pdf": true, ".txt": true, ".md": true}
+	return b.listDocuments(context.Background(), prefix)
+}
 
+func (b *BlobClient) listDocuments(ctx context.Context, prefix string) ([]BlobInfo, error) {
 	var results []BlobInfo
 	pager := b.client.NewListBlobsFlatPager(b.containerName, &azblob.ListBlobsFlatOptions{
 		Prefix: &prefix,
@@ -55,8 +63,7 @@ func (b *BlobClient) ListDocuments(prefix string) ([]BlobInfo, error) {
 			return nil, fmt.Errorf("list blobs: %w", err)
 		}
 		for _, blob := range page.Segment.BlobItems {
-			ext := strings.ToLower(filepath.Ext(*blob.Name))
-			if supported[ext] {
+			if isSupportedBlobDocument(*blob.Name) {
 				info := BlobInfo{Name: *blob.Name}
 				if blob.Properties.ContentLength != nil {
 					info.SizeBytes = *blob.Properties.ContentLength
@@ -69,6 +76,118 @@ func (b *BlobClient) ListDocuments(prefix string) ([]BlobInfo, error) {
 		}
 	}
 	return results, nil
+}
+
+func isSupportedBlobDocument(blobName string) bool {
+	if strings.HasSuffix(strings.ToLower(blobName), ".chunks.json") {
+		return false
+	}
+	switch strings.ToLower(filepath.Ext(blobName)) {
+	case ".pdf", ".txt", ".md":
+		return true
+	default:
+		return false
+	}
+}
+
+// Upload stores a single blob at the provided path without flattening or rewriting it.
+func (b *BlobClient) Upload(ctx context.Context, blobPath string, content io.Reader, contentType string) error {
+	opts := &azblob.UploadStreamOptions{}
+	if contentType != "" {
+		opts.HTTPHeaders = &blob.HTTPHeaders{BlobContentType: &contentType}
+	}
+	if _, err := b.client.UploadStream(ctx, b.containerName, blobPath, content, opts); err != nil {
+		return fmt.Errorf("upload blob %s: %w", blobPath, err)
+	}
+	return nil
+}
+
+// Download writes a single blob to dest.
+func (b *BlobClient) Download(ctx context.Context, blobPath string, dest io.Writer) error {
+	resp, err := b.client.DownloadStream(ctx, b.containerName, blobPath, nil)
+	if err != nil {
+		return fmt.Errorf("download blob %s: %w", blobPath, err)
+	}
+	body := resp.NewRetryReader(ctx, nil)
+	defer body.Close()
+
+	if _, err := io.Copy(dest, body); err != nil {
+		return fmt.Errorf("read blob %s: %w", blobPath, err)
+	}
+	return nil
+}
+
+// Exists reports whether a blob exists.
+func (b *BlobClient) Exists(ctx context.Context, blobPath string) (bool, error) {
+	resp, err := b.client.DownloadStream(ctx, b.containerName, blobPath, nil)
+	if err == nil {
+		_ = resp.Body.Close()
+		return true, nil
+	}
+	if isNotFound(err) {
+		return false, nil
+	}
+	return false, fmt.Errorf("check blob %s: %w", blobPath, err)
+}
+
+// Delete removes a single blob.
+func (b *BlobClient) Delete(ctx context.Context, blobPath string) error {
+	if _, err := b.client.DeleteBlob(ctx, b.containerName, blobPath, nil); err != nil {
+		return fmt.Errorf("delete blob %s: %w", blobPath, err)
+	}
+	return nil
+}
+
+// ReadJSON downloads a blob and decodes its JSON body.
+func (b *BlobClient) ReadJSON(ctx context.Context, blobPath string, dest any) error {
+	var buf bytes.Buffer
+	if err := b.Download(ctx, blobPath, &buf); err != nil {
+		return err
+	}
+	if err := json.NewDecoder(&buf).Decode(dest); err != nil {
+		return fmt.Errorf("decode json blob %s: %w", blobPath, err)
+	}
+	return nil
+}
+
+// WriteJSON encodes value as JSON and uploads it to a blob.
+func (b *BlobClient) WriteJSON(ctx context.Context, blobPath string, value any) error {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("encode json blob %s: %w", blobPath, err)
+	}
+	return b.Upload(ctx, blobPath, bytes.NewReader(data), "application/json")
+}
+
+// List returns blob objects under prefix for upload package orchestration.
+func (b *BlobClient) List(ctx context.Context, prefix string) ([]BlobInfo, error) {
+	var results []BlobInfo
+	pager := b.client.NewListBlobsFlatPager(b.containerName, &azblob.ListBlobsFlatOptions{
+		Prefix: &prefix,
+	})
+
+	for pager.More() {
+		page, err := pager.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list blobs: %w", err)
+		}
+		for _, blob := range page.Segment.BlobItems {
+			info := BlobInfo{Name: *blob.Name}
+			if blob.Properties.ContentLength != nil {
+				info.SizeBytes = *blob.Properties.ContentLength
+			}
+			if blob.Properties.ContentType != nil {
+				info.ContentType = *blob.Properties.ContentType
+			}
+			results = append(results, info)
+		}
+	}
+	return results, nil
+}
+
+func isNotFound(err error) bool {
+	var respErr *azcore.ResponseError
+	return errors.As(err, &respErr) && respErr.StatusCode == http.StatusNotFound
 }
 
 // DownloadDocuments downloads all supported files from the container to localDest.

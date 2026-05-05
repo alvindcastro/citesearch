@@ -141,10 +141,10 @@ Acceptance criteria:
 
 ## Phase U.3 - Blob Primitives and Sidecar Persistence
 
-- [ ] Add single-blob upload, download, exists, delete, read JSON, and write JSON operations.
-- [ ] Preserve existing blob sync behavior.
-- [ ] Store sidecars at `{blob_path}.chunks.json`.
-- [ ] Ensure supported-document listing does not accidentally treat sidecar JSON as ingestable input.
+- [x] Add single-blob upload, download, exists, delete, read JSON, and write JSON operations.
+- [x] Preserve existing blob sync behavior.
+- [x] Store sidecars at `{blob_path}.chunks.json`.
+- [x] Ensure supported-document listing does not accidentally treat sidecar JSON as ingestable input.
 
 Prompt for implementer:
 
@@ -156,29 +156,29 @@ BlobList/BlobSync behavior must remain compatible.
 
 Red tests:
 
-- [ ] `TestSidecarPath_AppendsChunksJSON`
-- [ ] `TestWriteSidecar_RoundTripsJSON`
-- [ ] `TestListUploads_IgnoresNonSidecarBlobs`
-- [ ] `TestListDocuments_IgnoresSidecarJSON`
-- [ ] `TestBlobUpload_UsesProvidedBlobPath`
+- [x] `TestSidecarPath_AppendsChunksJSON`
+- [x] `TestWriteSidecar_RoundTripsJSON`
+- [x] `TestListUploads_IgnoresNonSidecarBlobs`
+- [x] `TestListDocuments_IgnoresSidecarJSON`
+- [x] `TestBlobUpload_UsesProvidedBlobPath`
 
 Green tasks:
 
-- [ ] Add sidecar path helper.
-- [ ] Add real Blob methods needed by upload flow.
-- [ ] Add fake Blob store for upload package tests.
-- [ ] Update list filtering so `.chunks.json` is not treated as a document.
+- [x] Add sidecar path helper.
+- [x] Add real Blob methods needed by upload flow.
+- [x] Add fake Blob store for upload package tests.
+- [x] Update list filtering so `.chunks.json` is not treated as a document.
 
 Refactor tasks:
 
-- [ ] Keep Azure SDK specifics in `internal/azure`.
-- [ ] Keep upload orchestration in `internal/upload`.
+- [x] Keep Azure SDK specifics in `internal/azure`.
+- [x] Keep upload orchestration in `internal/upload`.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/upload/... -v` passes.
-- [ ] `go test ./internal/azure/... -v` passes without live Azure credentials.
-- [ ] Existing `/banner/blob/list` and `/banner/blob/sync` contracts are unchanged.
+- [x] `go test ./internal/upload/... -v` passes.
+- [x] `go test ./internal/azure/... -v` passes without live Azure credentials.
+- [x] Existing `/banner/blob/list` and `/banner/blob/sync` contracts are unchanged.
 
 ## Phase U.4 - Count Pages and Upload Validation
 
