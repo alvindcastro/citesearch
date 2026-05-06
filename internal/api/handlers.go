@@ -492,6 +492,59 @@ func (h *Handler) BannerUploadChunk(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// BannerUploadStatus godoc
+//
+//	@Summary	Get uploaded PDF chunking status
+//	@Tags		banner
+//	@Produce	json
+//	@Param		upload_id	path		string	true	"Upload ID"
+//	@Success	200			{object}	upload.StatusResponse
+//	@Failure	400			{object}	map[string]string
+//	@Failure	404			{object}	map[string]string
+//	@Failure	500			{object}	map[string]string
+//	@Router		/banner/upload/{upload_id}/status [get]
+func (h *Handler) BannerUploadStatus(c *gin.Context) {
+	service := h.uploadService
+	if service == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "AZURE_STORAGE_CONNECTION_STRING is not configured"})
+		return
+	}
+
+	resp, err := service.UploadStatus(c.Request.Context(), c.Param("upload_id"))
+	if err != nil {
+		writeUploadError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// BannerUploadList godoc
+//
+//	@Summary	List uploaded PDF sidecar summaries
+//	@Tags		banner
+//	@Produce	json
+//	@Success	200	{array}		upload.UploadSummary
+//	@Failure	400	{object}	map[string]string
+//	@Failure	500	{object}	map[string]string
+//	@Router		/banner/upload [get]
+func (h *Handler) BannerUploadList(c *gin.Context) {
+	service := h.uploadService
+	if service == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "AZURE_STORAGE_CONNECTION_STRING is not configured"})
+		return
+	}
+
+	resp, err := service.ListUploads(c.Request.Context(), h.cfg.AzureStorageBlobPrefix)
+	if err != nil {
+		writeUploadError(c, err)
+		return
+	}
+	if resp == nil {
+		resp = []upload.UploadSummary{}
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func writeUploadError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, upload.ErrUploadTooLarge), errors.Is(err, upload.ErrDownloadTooLarge):

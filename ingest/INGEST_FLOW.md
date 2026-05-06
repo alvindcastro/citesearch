@@ -215,10 +215,11 @@ computed fields:
 
 - `queryable_page_count` — sum of all chunked page ranges.
 - `estimated_remaining_minutes` — `ceil(remaining_pages * avg_chunks_per_page * 0.5s / 60)`.
+  The current adapter uses `avg_chunks_per_page=8`, or about 4 seconds per remaining page.
 
 `GET /banner/upload` lists all sidecars with a summary view: `upload_id`, `blob_path`,
 `status`, `chunking_pattern`, `total_pages`, `queryable_page_count`, `gap_count`,
-`gap_summary`.
+`gap_summary`. Results are sorted by `uploaded_at` descending.
 
 Status values:
 

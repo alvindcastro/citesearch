@@ -171,9 +171,12 @@ POST /banner/upload/chunk   → internal/upload/handler.go → ChunkPages()
                               appends to sidecar chunked_ranges, recomputes unchunked_ranges.
                               Iterates all unchunked_ranges when no page range specified.
 
-GET  /banner/upload/{id}/status → internal/upload/handler.go → ChunkingStatus()
+GET  /banner/upload/{id}/status → internal/api/handlers.go → BannerUploadStatus()
                               Reads sidecar from Blob. Returns chunked/unchunked ranges,
                               chunking_pattern, gap_count, gap_summary, estimated_remaining_minutes.
+
+GET  /banner/upload       → internal/api/handlers.go → BannerUploadList()
+                              Lists sidecar summaries sorted by uploaded_at descending.
 ```
 
 **Sidecar location:** `{blob_path}.chunks.json` — adjacent to the PDF in the same container.

@@ -219,18 +219,15 @@ func (s *Service) ListUploads(ctx context.Context, prefix string) ([]UploadSumma
 		return nil, err
 	}
 
-	sidecars := make([]BlobInfo, 0, len(blobs))
-	for _, blob := range blobs {
-		if IsSidecarPath(blob.Name) {
-			sidecars = append(sidecars, blob)
-		}
+	type uploadRecord struct {
+		state  SidecarState
+		counts SidecarCounts
 	}
-	sort.SliceStable(sidecars, func(i, j int) bool {
-		return sidecars[i].Name < sidecars[j].Name
-	})
-
-	summaries := make([]UploadSummary, 0, len(sidecars))
-	for _, blob := range sidecars {
+	records := make([]uploadRecord, 0, len(blobs))
+	for _, blob := range blobs {
+		if !IsSidecarPath(blob.Name) {
+			continue
+		}
 		var state SidecarState
 		if err := s.deps.BlobStore.ReadJSON(ctx, blob.Name, &state); err != nil {
 			return nil, err
@@ -239,16 +236,21 @@ func (s *Service) ListUploads(ctx context.Context, prefix string) ([]UploadSumma
 		if err != nil {
 			return nil, err
 		}
-		summaries = append(summaries, UploadSummary{
-			UploadID:           derived.UploadID,
-			BlobPath:           derived.BlobPath,
-			Status:             derived.Status,
-			ChunkingPattern:    derived.ChunkingPattern,
-			TotalPages:         derived.TotalPages,
-			QueryablePageCount: counts.QueryablePageCount,
-			GapCount:           derived.GapCount,
-			GapSummary:         derived.GapSummary,
+		records = append(records, uploadRecord{
+			state:  derived,
+			counts: counts,
 		})
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		if records[i].state.UploadedAt.Equal(records[j].state.UploadedAt) {
+			return records[i].state.BlobPath < records[j].state.BlobPath
+		}
+		return records[i].state.UploadedAt.After(records[j].state.UploadedAt)
+	})
+
+	summaries := make([]UploadSummary, 0, len(records))
+	for _, record := range records {
+		summaries = append(summaries, uploadSummary(record.state, record.counts))
 	}
 	return summaries, nil
 }

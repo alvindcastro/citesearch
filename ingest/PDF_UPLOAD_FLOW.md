@@ -350,12 +350,16 @@ Read the current sidecar state. Does not modify anything.
 
 `estimated_remaining_minutes` sums across all `unchunked_ranges`:
 `ceil(sum(range.end - range.start + 1) * avg_chunks_per_page * 0.5s / 60)`.
+The adapter currently uses `avg_chunks_per_page=8`, so each remaining page contributes about
+4 seconds to the estimate.
 
 ---
 
 ### `GET /banner/upload`
 
-List all tracked uploads. Returns sidecar summaries for all documents.
+List all tracked uploads. Returns sidecar summaries for all documents, sorted by
+`uploaded_at` descending. The timestamp is used for ordering but is not included in the summary
+response.
 
 **Response:**
 

@@ -412,10 +412,10 @@ Acceptance criteria:
 
 ## Phase U.9 - Status and List Endpoints
 
-- [ ] Add `GET /banner/upload/{upload_id}/status`.
-- [ ] Add `GET /banner/upload`.
-- [ ] Include derived sidecar fields and estimates in responses.
-- [ ] Do not modify sidecars during status reads.
+- [x] Add `GET /banner/upload/{upload_id}/status`.
+- [x] Add `GET /banner/upload`.
+- [x] Include derived sidecar fields and estimates in responses.
+- [x] Do not modify sidecars during status reads.
 
 Prompt for implementer:
 
@@ -427,28 +427,28 @@ sidecars.
 
 Red tests:
 
-- [ ] `TestUploadStatus_NotFoundReturns404`
-- [ ] `TestUploadStatus_ReturnsDerivedFields`
-- [ ] `TestUploadStatus_DoesNotWriteSidecar`
-- [ ] `TestUploadList_ReturnsAllSidecarSummaries`
-- [ ] `TestUploadList_SortsByUploadedAtDescending`
-- [ ] `TestUploadList_EmptyReturnsEmptyArray`
+- [x] `TestUploadStatus_NotFoundReturns404`
+- [x] `TestUploadStatus_ReturnsDerivedFields`
+- [x] `TestUploadStatus_DoesNotWriteSidecar`
+- [x] `TestUploadList_ReturnsAllSidecarSummaries`
+- [x] `TestUploadList_SortsByUploadedAtDescending`
+- [x] `TestUploadList_EmptyReturnsEmptyArray`
 
 Green tasks:
 
-- [ ] Implement status service method.
-- [ ] Implement list service method using sidecar discovery.
-- [ ] Add routes.
-- [ ] Add remaining-time estimate from unchunked page count.
+- [x] Implement status service method.
+- [x] Implement list service method using sidecar discovery.
+- [x] Add routes.
+- [x] Add remaining-time estimate from unchunked page count.
 
 Refactor tasks:
 
-- [ ] Share response projection code between status, list, upload, and chunk responses.
+- [x] Share response projection code between status and list responses.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/api/... -run 'UploadStatus|UploadList' -v` passes.
-- [ ] Status/list responses match `PDF_UPLOAD_FLOW.md`.
+- [x] `go test ./internal/api/... -run 'UploadStatus|UploadList' -v` passes.
+- [x] Status/list responses match `PDF_UPLOAD_FLOW.md`.
 
 ## Phase U.10 - Delete Uploaded Document
 
@@ -577,6 +577,7 @@ Acceptance criteria:
       locking acceptable for the first pass?
 - [x] Should chunk IDs be returned from `ingest.Run()` so sidecars can support exact index purge?
       Decision: exact index purge is deferred until chunk IDs are reliably returned or persisted.
-- [ ] Should `GET /banner/upload` list only sidecars, or also detect orphan PDFs with missing sidecars?
+- [x] Should `GET /banner/upload` list only sidecars, or also detect orphan PDFs with missing sidecars?
+      Decision: list tracked sidecars only. Orphan PDF detection is not part of Phase U.9.
 - [ ] Should Blob paths include `AZURE_STORAGE_BLOB_PREFIX`, and if yes, should responses show prefixed
       or canonical unprefixed paths?
