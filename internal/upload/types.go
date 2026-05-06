@@ -95,6 +95,18 @@ type StatusResponse struct {
 	EstimatedRemainingMinutes int `json:"estimated_remaining_minutes"`
 }
 
+type DeleteRequest struct {
+	UploadID   string `json:"upload_id"`
+	PurgeIndex bool   `json:"purge_index"`
+}
+
+type DeleteResponse struct {
+	UploadID       string `json:"upload_id"`
+	BlobDeleted    bool   `json:"blob_deleted"`
+	SidecarDeleted bool   `json:"sidecar_deleted"`
+	ChunksPurged   bool   `json:"chunks_purged"`
+}
+
 type UploadSummary struct {
 	UploadID           string `json:"upload_id"`
 	BlobPath           string `json:"blob_path"`

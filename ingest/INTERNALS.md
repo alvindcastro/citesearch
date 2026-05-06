@@ -682,6 +682,9 @@ Blob Storage. There is no database, no queue, no job tracker. This means:
   sidecar record. Reissuing the call re-chunks gap 2 from the start; deterministic chunk IDs
   prevent duplicates via Azure Search's merge-or-upload
   semantics.
+- `DELETE /banner/upload/{upload_id}` removes only the PDF blob and sidecar. It does not purge
+  Azure Search chunks. `purge_index=true` returns 501 and leaves storage unchanged until chunk IDs
+  are reliably persisted and a tested purge seam exists.
 
 ### 9. `ingest.CountPages()` Is Required for Phase U Upload
 

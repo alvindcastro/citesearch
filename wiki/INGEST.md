@@ -504,7 +504,8 @@ Phase U introduces upload paths that do not require filesystem access:
 | Upload — multipart (Phase U.5) | `POST /banner/upload` | Ad-hoc file upload to Blob. Creates sidecar. Does not chunk. |
 | Upload — from URL (Phase U.6) | `POST /banner/upload/from-url` | Ellucian ECC download links, automation. Creates sidecar. Does not chunk. |
 | Chunk (Phase U.7) | `POST /banner/upload/chunk` | Chunk a page range of an uploaded PDF. |
-| Status/list/delete (Phase U.8/U.9) | `GET /banner/upload...`, `DELETE /banner/upload/{id}` | Manage sidecar-backed upload state. |
+| Status/list (Phase U.8/U.9) | `GET /banner/upload...` | Manage sidecar-backed upload state. |
+| Delete (Phase U.10) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
 
 ---
 
@@ -705,6 +706,32 @@ deferred until the ingest result exposes those IDs.
 | 404 | `upload_id` not found, PDF missing, or sidecar missing from Blob. |
 | 409 | A chunk run is already active for this `upload_id` in the same API process. |
 | 500 | Blob download, ingest, or sidecar write failed. |
+
+### `DELETE /banner/upload/{upload_id}`
+
+Delete the uploaded PDF blob and its `{blob_path}.chunks.json` sidecar. This endpoint does
+not purge Azure Search chunks in Phase U.10.
+
+**Response:**
+```json
+{
+  "upload_id": "a3f8c1d2-...",
+  "blob_deleted": true,
+  "sidecar_deleted": true,
+  "chunks_purged": false
+}
+```
+
+`?purge_index=true` returns `501 Not Implemented` and leaves the blob and sidecar in place
+until uploaded chunk IDs are reliably persisted and a tested search purge path exists.
+
+**Errors:**
+
+| Code | Cause |
+|---|---|
+| 404 | `upload_id` sidecar not found. |
+| 501 | `purge_index=true` requested before index purge support exists. |
+| 500 | Blob or sidecar deletion failed. |
 
 If chunking all remaining gaps fails midway, completed gaps stay recorded because the sidecar
 is written after each successful gap. Repeating the no-range request resumes from the remaining

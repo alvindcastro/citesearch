@@ -545,6 +545,37 @@ func (h *Handler) BannerUploadList(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// BannerUploadDelete godoc
+//
+//	@Summary	Delete an uploaded PDF blob and sidecar
+//	@Tags		banner
+//	@Produce	json
+//	@Param		upload_id	path		string	true	"Upload ID"
+//	@Param		purge_index	query		bool	false	"Purge indexed chunks. Not implemented in Phase U.10."
+//	@Success	200			{object}	upload.DeleteResponse
+//	@Failure	400			{object}	map[string]string
+//	@Failure	404			{object}	map[string]string
+//	@Failure	501			{object}	map[string]string
+//	@Failure	500			{object}	map[string]string
+//	@Router		/banner/upload/{upload_id} [delete]
+func (h *Handler) BannerUploadDelete(c *gin.Context) {
+	service := h.uploadService
+	if service == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "AZURE_STORAGE_CONNECTION_STRING is not configured"})
+		return
+	}
+
+	resp, err := service.DeleteUpload(c.Request.Context(), upload.DeleteRequest{
+		UploadID:   c.Param("upload_id"),
+		PurgeIndex: c.Query("purge_index") == "true",
+	})
+	if err != nil {
+		writeUploadError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func writeUploadError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, upload.ErrUploadTooLarge), errors.Is(err, upload.ErrDownloadTooLarge):
@@ -561,6 +592,8 @@ func writeUploadError(c *gin.Context, err error) {
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrUploadNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrPurgeNotImplemented):
+		c.JSON(http.StatusNotImplemented, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrMissingSourceType),
 		errors.Is(err, upload.ErrUnsupportedSourceType),
 		errors.Is(err, upload.ErrSOPUploadUnsupported),

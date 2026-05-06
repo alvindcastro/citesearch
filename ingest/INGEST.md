@@ -511,7 +511,7 @@ in stages across any page ranges.
 | Chunk (Phase U.7) | `POST /banner/upload/chunk` | Chunk a page range of any uploaded PDF. Can be called multiple times with non-overlapping ranges in any order. |
 | Status (Phase U.8) | `GET /banner/upload/{id}/status` | Read sidecar: chunked ranges, unchunked ranges, chunking_pattern, gap_summary. |
 | List (Phase U.8) | `GET /banner/upload` | List all tracked uploads with chunking status and gap summaries. |
-| Delete (Phase U.9) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
+| Delete (Phase U.10) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
 
 ---
 
@@ -694,6 +694,34 @@ deferred until the ingest result exposes those IDs.
 | 404 | `upload_id` not found, PDF missing, or sidecar missing from Blob. |
 | 409 | A chunk run is already active for this `upload_id` in the same API process. |
 | 500 | Blob download, ingest, or sidecar write failed. |
+
+---
+
+### `DELETE /banner/upload/{upload_id}`
+
+Delete the uploaded PDF blob and its `{blob_path}.chunks.json` sidecar. This endpoint does
+not purge Azure Search chunks in Phase U.10.
+
+**Response:**
+```json
+{
+  "upload_id": "a3f8c1d2-...",
+  "blob_deleted": true,
+  "sidecar_deleted": true,
+  "chunks_purged": false
+}
+```
+
+`?purge_index=true` returns `501 Not Implemented` and leaves the blob and sidecar in place
+until uploaded chunk IDs are reliably persisted and a tested search purge path exists.
+
+**Errors:**
+
+| Code | Cause |
+|---|---|
+| 404 | `upload_id` sidecar not found. |
+| 501 | `purge_index=true` requested before index purge support exists. |
+| 500 | Blob or sidecar deletion failed. |
 
 ---
 

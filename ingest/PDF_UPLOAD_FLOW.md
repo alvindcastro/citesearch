@@ -396,6 +396,9 @@ Remove the PDF blob and its sidecar. Does not remove chunks from the Azure Searc
 Exact index purge is deferred until uploaded page ranges reliably persist the chunk IDs needed
 for tested search deletion.
 
+`?purge_index=true` is accepted only as an explicit request for future behavior. In Phase U.10
+it returns `501 Not Implemented` and does not delete the blob or sidecar.
+
 **Response:**
 
 ```json

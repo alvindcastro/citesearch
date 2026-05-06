@@ -452,10 +452,10 @@ Acceptance criteria:
 
 ## Phase U.10 - Delete Uploaded Document
 
-- [ ] Add `DELETE /banner/upload/{upload_id}`.
-- [ ] Delete the document blob and sidecar.
-- [ ] Defer `?purge_index=true` until chunk IDs are reliably returned or persisted.
-- [ ] Return explicit booleans for blob, sidecar, and chunk purge.
+- [x] Add `DELETE /banner/upload/{upload_id}`.
+- [x] Delete the document blob and sidecar.
+- [x] Defer `?purge_index=true` until chunk IDs are reliably returned or persisted.
+- [x] Return explicit booleans for blob, sidecar, and chunk purge.
 
 Prompt for implementer:
 
@@ -467,26 +467,26 @@ Do not fake a successful purge in production responses.
 
 Red tests:
 
-- [ ] `TestUploadDelete_NotFoundReturns404`
-- [ ] `TestUploadDelete_DeletesBlobAndSidecar`
-- [ ] `TestUploadDelete_DoesNotCallSearchByDefault`
-- [ ] `TestUploadDelete_PurgeTrueReturnsNotImplementedUntilChunkIDsPersisted`
+- [x] `TestUploadDelete_NotFoundReturns404`
+- [x] `TestUploadDelete_DeletesBlobAndSidecar`
+- [x] `TestUploadDelete_DoesNotCallSearchByDefault`
+- [x] `TestUploadDelete_PurgeTrueReturnsNotImplementedUntilChunkIDsPersisted`
 
 Green tasks:
 
-- [ ] Implement delete service method.
-- [ ] Add route.
-- [ ] Leave search purge unimplemented until a tested chunk-ID persistence path exists.
-- [ ] Map partial-delete errors clearly.
+- [x] Implement delete service method.
+- [x] Add route.
+- [x] Leave search purge unimplemented until a tested chunk-ID persistence path exists.
+- [x] Map partial-delete errors clearly.
 
 Refactor tasks:
 
-- [ ] Keep purge behavior explicit in docs and responses.
+- [x] Keep purge behavior explicit in docs and responses.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/api/... -run UploadDelete -v` passes.
-- [ ] Delete behavior matches documented response fields.
+- [x] `go test ./internal/api/... -run UploadDelete -v` passes.
+- [x] Delete behavior matches documented response fields.
 
 ## Phase U.11 - Operator and Agent Documentation
 
