@@ -225,6 +225,39 @@ func TestChunkUpload_ResponseIncludesGapCountsAndStatus(t *testing.T) {
 	}
 }
 
+func TestChunkUpload_ActiveLockReturns409(t *testing.T) {
+	router, store, runner := newChunkUploadTestRouter(t)
+	blobPath := "banner/finance/releases/2026/Banner_Finance_9.3.22.pdf"
+	store.blobs[blobPath] = []byte("%PDF-1.4")
+	runner.block = make(chan struct{})
+	writeAPIChunkSidecar(t, store, upload.SidecarState{
+		BlobPath:   blobPath,
+		UploadID:   "upload-123",
+		UploadedAt: time.Date(2026, 4, 26, 10, 0, 0, 0, time.UTC),
+		SourceType: upload.SourceTypeBanner,
+		Module:     "Finance",
+		Version:    "9.3.22",
+		Year:       "2026",
+		TotalPages: 4,
+	})
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- performChunkUpload(router, map[string]any{"upload_id": "upload-123"})
+	}()
+	runner.waitUntilStarted(t)
+
+	w := performChunkUpload(router, map[string]any{"upload_id": "upload-123"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("status: got %d, want %d; body=%s", w.Code, http.StatusConflict, w.Body.String())
+	}
+
+	close(runner.block)
+	if first := <-done; first.Code != http.StatusOK {
+		t.Fatalf("first chunk status: got %d, want %d; body=%s", first.Code, http.StatusOK, first.Body.String())
+	}
+}
+
 func TestChunkUpload_RouteIsRegistered(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := NewRouter(&config.Config{MaxUploadSizeMB: 100})

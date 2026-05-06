@@ -692,6 +692,7 @@ deferred until the ingest result exposes those IDs.
 |---|---|
 | 400 | Missing `upload_id`, incomplete page range, overlap, or out-of-bounds page range. |
 | 404 | `upload_id` not found, PDF missing, or sidecar missing from Blob. |
+| 409 | A chunk run is already active for this `upload_id` in the same API process. |
 | 500 | Blob download, ingest, or sidecar write failed. |
 
 ---

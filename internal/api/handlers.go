@@ -468,6 +468,7 @@ func (h *Handler) BannerUploadFromURL(c *gin.Context) {
 //	@Success	200		{object}	upload.ChunkResponse
 //	@Failure	400		{object}	map[string]string
 //	@Failure	404		{object}	map[string]string
+//	@Failure	409		{object}	map[string]string
 //	@Failure	500		{object}	map[string]string
 //	@Router		/banner/upload/chunk [post]
 func (h *Handler) BannerUploadChunk(c *gin.Context) {
@@ -496,6 +497,8 @@ func writeUploadError(c *gin.Context, err error) {
 	case errors.Is(err, upload.ErrUploadTooLarge), errors.Is(err, upload.ErrDownloadTooLarge):
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrDuplicateBlob):
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrChunkAlreadyRunning):
 		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrDownloadNotFound):
 		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})

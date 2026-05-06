@@ -153,6 +153,10 @@ type HTTPDownloader interface {
 	Download(ctx context.Context, url string, maxBytes int64) (DownloadResult, error)
 }
 
+type ChunkLockManager interface {
+	TryLock(uploadID string) (release func(), acquired bool)
+}
+
 type DownloadResult struct {
 	Filename    string
 	ContentType string
@@ -167,4 +171,5 @@ type Dependencies struct {
 	Clock          Clock
 	IDGenerator    IDGenerator
 	HTTPDownloader HTTPDownloader
+	ChunkLocks     ChunkLockManager
 }

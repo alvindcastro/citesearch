@@ -142,7 +142,8 @@ state has one gap covering the entire document.
 
 Chunking is triggered by `POST /banner/upload/chunk`. The request carries the `upload_id`
 and an optional `page_start`/`page_end`. If neither is supplied, all remaining unchunked
-pages are processed.
+pages are processed. A process-local per-`upload_id` guard is acquired before sidecar reads and
+released on every return path; a second active request for the same upload returns 409.
 
 ### Validation before any embedding starts
 

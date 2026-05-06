@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -361,11 +362,23 @@ type fakeUploadIngestRunner struct {
 	requests   []upload.IngestRequest
 	chunkIDs   []string
 	failOnCall int
+	block      chan struct{}
+	started    chan struct{}
+	startOnce  sync.Once
 }
 
 func (f *fakeUploadIngestRunner) Run(_ context.Context, req upload.IngestRequest) (upload.IngestResult, error) {
 	f.calls++
 	f.requests = append(f.requests, req)
+	if f.block != nil {
+		if f.started == nil {
+			f.started = make(chan struct{})
+		}
+		f.startOnce.Do(func() {
+			close(f.started)
+		})
+		<-f.block
+	}
 	if f.failOnCall > 0 && f.calls == f.failOnCall {
 		return upload.IngestResult{}, errors.New("ingest failed")
 	}
@@ -374,6 +387,18 @@ func (f *fakeUploadIngestRunner) Run(_ context.Context, req upload.IngestRequest
 		ChunksIndexed:      len(f.chunkIDs),
 		ChunkIDs:           f.chunkIDs,
 	}, nil
+}
+
+func (f *fakeUploadIngestRunner) waitUntilStarted(t *testing.T) {
+	t.Helper()
+	if f.started == nil {
+		f.started = make(chan struct{})
+	}
+	select {
+	case <-f.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for ingest runner to start")
+	}
 }
 
 type fakeUploadClock struct{}

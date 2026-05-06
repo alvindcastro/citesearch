@@ -20,6 +20,9 @@ type Service struct {
 }
 
 func NewService(deps Dependencies) *Service {
+	if deps.ChunkLocks == nil {
+		deps.ChunkLocks = defaultChunkLocks
+	}
 	return &Service{deps: deps}
 }
 

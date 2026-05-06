@@ -14,6 +14,7 @@ var (
 	ErrUploadNotFound      = errors.New("upload not found")
 	ErrIncompletePageRange = errors.New("page_start and page_end must be provided together")
 	ErrIngestNotConfigured = errors.New("ingest runner is not configured")
+	ErrChunkAlreadyRunning = errors.New("chunk run already active for upload_id")
 )
 
 func (s *Service) ChunkUpload(ctx context.Context, req ChunkRequest, defaultPagesPerBatch int) (ChunkResponse, error) {
@@ -26,6 +27,11 @@ func (s *Service) ChunkUpload(ctx context.Context, req ChunkRequest, defaultPage
 	if s.deps.IngestRunner == nil {
 		return ChunkResponse{}, ErrIngestNotConfigured
 	}
+	release, acquired := s.deps.ChunkLocks.TryLock(req.UploadID)
+	if !acquired {
+		return ChunkResponse{}, ErrChunkAlreadyRunning
+	}
+	defer release()
 
 	state, err := s.findSidecarByUploadID(ctx, req.UploadID)
 	if err != nil {

@@ -376,9 +376,9 @@ Acceptance criteria:
 
 ## Phase U.8 - Chunk Concurrency Guard
 
-- [ ] Return 409 when a chunk run is already active for an `upload_id`.
-- [ ] Keep the first implementation process-local unless Blob lease support is chosen explicitly.
-- [ ] Ensure locks are released on success, validation failure, and ingest failure.
+- [x] Return 409 when a chunk run is already active for an `upload_id`.
+- [x] Keep the first implementation process-local unless Blob lease support is chosen explicitly.
+- [x] Ensure locks are released on success, validation failure, and ingest failure.
 
 Prompt for implementer:
 
@@ -390,25 +390,25 @@ blocked and that locks are released after failure.
 
 Red tests:
 
-- [ ] `TestChunkLock_SameUploadIDReturns409`
-- [ ] `TestChunkLock_DifferentUploadIDAllowed`
-- [ ] `TestChunkLock_ReleasedAfterSuccess`
-- [ ] `TestChunkLock_ReleasedAfterFailure`
+- [x] `TestChunkLock_SameUploadIDReturns409`
+- [x] `TestChunkLock_DifferentUploadIDAllowed`
+- [x] `TestChunkLock_ReleasedAfterSuccess`
+- [x] `TestChunkLock_ReleasedAfterFailure`
 
 Green tasks:
 
-- [ ] Add small lock manager in upload package.
-- [ ] Wire lock acquisition around chunk execution.
-- [ ] Map active-lock errors to HTTP 409.
+- [x] Add small lock manager in upload package.
+- [x] Wire lock acquisition around chunk execution.
+- [x] Map active-lock errors to HTTP 409.
 
 Refactor tasks:
 
-- [ ] Keep the lock manager replaceable if Blob leases are added later.
+- [x] Keep the lock manager replaceable if Blob leases are added later.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/upload/... -run Lock -v` passes.
-- [ ] `go test ./internal/api/... -run ChunkUpload -v` passes.
+- [x] `go test ./internal/upload/... -run Lock -v` passes.
+- [x] `go test ./internal/api/... -run ChunkUpload -v` passes.
 
 ## Phase U.9 - Status and List Endpoints
 

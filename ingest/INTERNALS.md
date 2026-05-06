@@ -670,8 +670,9 @@ Blob Storage. There is no database, no queue, no job tracker. This means:
 - If the sidecar blob is deleted or corrupted, the chunking state for that document is lost.
   The PDF itself remains in Blob Storage but there is no way to know which pages were already
   chunked without re-reading the Azure Search index directly.
-- Concurrent chunk calls for the same `upload_id` are rejected with 409 to prevent race
-  conditions on sidecar writes. Only one chunk call per document can run at a time.
+- Concurrent chunk calls for the same `upload_id` are rejected with 409 inside a single API
+  process to prevent race conditions on sidecar writes. This is a process-local guard, not a
+  cross-replica Blob lease.
 - The sidecar write is atomic per gap — if a chunk-all-remaining call processes 3 gaps and
   fails during gap 2, gap 1 is durably recorded and gap 3 is still pending. Gap 2 may be
   partially indexed in Azure Search (chunks uploaded before the failure) with no corresponding
@@ -707,7 +708,7 @@ Until this function is added, the upload handler cannot create a valid sidecar.
 | `POST /banner/upload` returns 409 | PDF already exists at synthesized blob path | `GET /banner/upload` to find existing `upload_id`, or `DELETE` and re-upload |
 | `POST /banner/upload/chunk` returns 404 | `upload_id` sidecar missing from Blob (container restart, manual delete) | Re-upload the PDF |
 | `POST /banner/upload/chunk` returns 400 range overlap | Requested range intersects a `chunked_ranges` entry | `GET /banner/upload/{id}/status` to see current ranges |
-| `POST /banner/upload/chunk` returns 409 chunk in progress | Stale lock from a crashed previous call | `fly machine restart` to clear |
+| `POST /banner/upload/chunk` returns 409 chunk in progress | Another chunk call for this `upload_id` is active in the same API process | Wait for the active call to finish, then retry |
 | Upload succeeds but ask returns 0 results | Chunk call never ran, wrong `module_filter`, or `chunking_pattern=sparse` | `GET /banner/upload/{id}/status` — check `status` and `gap_summary` |
 | gRPC server fails to start | `gen/go/` missing | Run `buf generate` |
 

@@ -247,7 +247,7 @@ func newChunkTestService(store *fakeBlobStore) *Service {
 	return newChunkTestServiceWithRunner(store, &recordingIngestRunner{})
 }
 
-func newChunkTestServiceWithRunner(store *fakeBlobStore, runner *recordingIngestRunner) *Service {
+func newChunkTestServiceWithRunner(store *fakeBlobStore, runner IngestRunner) *Service {
 	return NewService(Dependencies{
 		BlobStore:    store,
 		PageCounter:  fakePageCounter{},

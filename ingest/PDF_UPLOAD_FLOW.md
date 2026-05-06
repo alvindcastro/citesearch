@@ -313,6 +313,9 @@ in this call. For a targeted range call, these are 1 and 0 respectively.
 | 404 | `upload_id` not found (PDF or sidecar missing from Blob). |
 | 409 | A chunk run is already in progress for this `upload_id`. |
 
+The 409 guard is process-local in the first implementation. It prevents concurrent chunk calls
+inside one API process, but it is not a cross-replica Blob lease.
+
 ---
 
 ### `GET /banner/upload/{upload_id}/status`
