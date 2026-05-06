@@ -39,14 +39,19 @@ func parseSopFilename(filePath string) sopMetadata {
 
 // isSopDocument reports whether a file path is under the sop input folder.
 func isSopDocument(filePath string) bool {
-	// Normalise to forward slashes for consistent matching on all platforms.
-	normalized := filepath.ToSlash(filePath)
+	normalized := normalizePathForMatch(filePath)
 	return strings.Contains(normalized, "/docs/sop/")
 }
 
 // isUserGuideDocument reports whether a file path is under a use/ folder,
 // indicating a Banner functional user guide rather than a release note.
 func isUserGuideDocument(filePath string) bool {
-	normalized := filepath.ToSlash(filePath)
+	normalized := normalizePathForMatch(filePath)
 	return strings.Contains(normalized, "/use/")
+}
+
+func normalizePathForMatch(filePath string) string {
+	// filepath.ToSlash only converts the OS-native separator. On Linux test runs,
+	// Windows-style backslashes remain untouched unless we normalize them first.
+	return filepath.ToSlash(strings.ReplaceAll(filePath, "\\", "/"))
 }

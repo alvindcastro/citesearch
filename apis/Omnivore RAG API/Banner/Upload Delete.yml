@@ -1,0 +1,15 @@
+info:
+  name: Upload Delete
+  type: http
+  seq: 15
+
+http:
+  method: DELETE
+  url: "{{base_url}}/banner/upload/{{upload_id}}"
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

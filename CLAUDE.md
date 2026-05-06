@@ -13,6 +13,25 @@ Returns rag.AskResponse:  { answer, question, retrieval_count, sources[] }
 sources[0].score = raw Azure AI Search hybrid score (NOT a normalized 0–1 confidence).
                    Observed range for valid answers: 0.01–0.05. See wiki/RUNBOOK.md § Score Distribution.
 
+## Upload/chunk API (Phase U)
+POST /banner/upload              multipart PDF upload; creates Blob + sidecar only, does not chunk
+POST /banner/upload/from-url     HTTPS allowlisted URL PDF upload; creates Blob + sidecar only
+POST /banner/upload/chunk        chunks uploaded PDF pages; only upload-flow route that calls ingest.Run()
+GET  /banner/upload/{id}/status  reads sidecar-derived chunking status
+GET  /banner/upload              lists sidecar summaries
+DELETE /banner/upload/{id}       deletes PDF Blob + sidecar; does not purge Azure Search chunks
+
+Phase U upload accepts PDFs only for `source_type=banner` or `banner_user_guide`.
+`source_type=sop`, DOCX, TXT, and Markdown upload are rejected before Blob or sidecar writes.
+Uploaded PDFs are not queryable until `POST /banner/upload/chunk` completes for at least one
+page range. `?purge_index=true` on delete returns 501 until uploaded chunk IDs are reliably
+persisted and a tested purge path exists.
+
+Upload env vars:
+- `MAX_UPLOAD_SIZE_MB` default `100`
+- `UPLOAD_URL_ALLOWLIST` default `customercare.ellucian.com,ellucian.com`; `*` allows any HTTPS host
+- `AZURE_STORAGE_CONNECTION_STRING` must be set for upload routes to be enabled
+
 ## This repo — new code only
 internal/adapter   → HTTP client wrapping citesearch
 internal/intent    → keyword intent classifier (6 intents)

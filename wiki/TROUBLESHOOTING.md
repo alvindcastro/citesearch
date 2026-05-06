@@ -1,10 +1,11 @@
 # Troubleshooting Guide
 
-Symptoms → root cause → fix. Organized by layer from top (Botpress) to bottom (Azure).
+Symptoms -> root cause -> fix. Start with the quick diagnostic sequence, then jump to the layer
+that fails.
 
 ---
 
-## Quick diagnostic sequence
+## Quick Diagnostic Sequence
 
 Before chasing a specific symptom, run this top-to-bottom check:
 
@@ -41,6 +42,7 @@ If any layer fails, fix that layer before checking higher ones.
 **Cause:** `.env` file missing or incomplete.
 
 **Fix:**
+
 ```bash
 cp .env.example .env
 # Fill in AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_KEY,
@@ -55,6 +57,7 @@ go run cmd/main.go
 **Symptom:** `retrieval_count: 0`, `sources: []`
 
 **Cause A:** No documents ingested yet.
+
 ```bash
 curl -s http://localhost:8000/index/stats | jq .
 # If document_count == 0, ingest first
@@ -64,6 +67,7 @@ curl -s -X POST http://localhost:8000/banner/ingest \
 ```
 
 **Cause B:** Wrong search index name.
+
 ```bash
 # Check what index your .env points at
 grep AZURE_SEARCH_INDEX_NAME .env
@@ -71,6 +75,7 @@ grep AZURE_SEARCH_INDEX_NAME .env
 ```
 
 **Cause C:** Query too vague — Azure Search RRF scores all come in below threshold.
+
 ```bash
 # Try a very specific query with known terms from your documents
 curl -s -X POST http://localhost:8000/banner/ask \
@@ -85,6 +90,7 @@ curl -s -X POST http://localhost:8000/banner/ask \
 **Symptom:** HTTP 500, `"error": "internal server error"` or JSON decode error in logs.
 
 **Cause:** Azure OpenAI quota exceeded or deployment name mismatch.
+
 ```bash
 # Check deployment name matches Azure Portal → OpenAI resource → Deployments
 grep AZURE_OPENAI_CHAT_DEPLOYMENT .env
@@ -107,7 +113,8 @@ curl -s -X POST http://localhost:8000/banner/ingest \
   -d '{"docs_path":"data/docs/banner","overwrite":false,"start_page":1,"end_page":50}'
 ```
 
-**Nice to know:** Azure OpenAI embedding rate limits are per-minute token counts. If you're ingesting many large PDFs, space them out or reduce chunk size via `CHUNK_SIZE` env var.
+**Nice to know:** Azure OpenAI embedding rate limits are per-minute token counts. If you are
+ingesting many large PDFs, space them out or reduce chunk size via `CHUNK_SIZE`.
 
 ---
 
@@ -120,6 +127,7 @@ curl -s -X POST http://localhost:8000/banner/ingest \
 **Cause:** ngrok was restarted; free-tier URL changed.
 
 **Fix:**
+
 ```bash
 # Get new URL from ngrok terminal output, then:
 fly secrets set RAG_BACKEND_URL=https://<new-ngrok-url>
@@ -128,7 +136,8 @@ fly secrets set RAG_BACKEND_URL=https://<new-ngrok-url>
 fly logs  # watch for "Ask Banner adapter starting"
 ```
 
-**Nice to know:** The ngrok dashboard at `http://localhost:4040` shows all tunnel activity including request/response pairs. Use it to confirm traffic is reaching your local backend.
+**Nice to know:** The ngrok dashboard at `http://localhost:4040` shows tunnel activity, including
+request/response pairs. Use it to confirm traffic is reaching your local backend.
 
 ---
 
@@ -137,6 +146,7 @@ fly logs  # watch for "Ask Banner adapter starting"
 **Symptom:** `curl https://<ngrok-url>/health` returns after 30 s with a timeout.
 
 **Cause A:** citesearch backend isn't running.
+
 ```bash
 # Check if port 8000 is listening (WSL/Linux)
 ss -tlnp | grep 8000
@@ -146,7 +156,8 @@ netstat -ano | findstr :8000
 
 **Cause B:** Firewall blocking ngrok agent's outbound connection.
 
-**Cause C:** ngrok free plan: if you have >1 concurrent connection (e.g., Fly.io + your curl test), the second one may be queued. Free plan allows 1 simultaneous tunnel.
+**Cause C:** ngrok free plan: if you have more than one concurrent connection, such as Fly.io plus
+a local curl test, the second request may queue. Free plan allows one simultaneous tunnel.
 
 ---
 
@@ -155,6 +166,7 @@ netstat -ano | findstr :8000
 **Cause:** Free plan: only 1 active tunnel at a time. You have multiple ngrok processes running.
 
 **Fix:**
+
 ```bash
 # Kill all ngrok processes
 pkill ngrok   # Linux/WSL
@@ -170,7 +182,9 @@ ngrok http 8000
 
 **Symptom:** First message after a period of inactivity gets no response from Botpress.
 
-**Cause:** `auto_stop_machines = 'stop'` in `fly.toml` — Fly stops the machine after idle period. `auto_start_machines = true` restarts it on first request, but that takes ~3–5 seconds. The Botpress Execute Code node likely has a shorter timeout.
+**Cause:** `auto_stop_machines = 'stop'` in `fly.toml`. Fly stops the machine after an idle
+period. `auto_start_machines = true` restarts it on the first request, but that takes about
+3-5 seconds. The Botpress Execute Code node may time out first.
 
 **Fix options:**
 - Set `min_machines_running = 1` in `fly.toml` to keep one instance always warm (costs ~$2/mo on shared-cpu-1x).
@@ -184,6 +198,7 @@ ngrok http 8000
 **Symptom:** Build log shows Go compilation error.
 
 **Common cause:** Missing `go.sum` entry (dependency added but not committed).
+
 ```bash
 go mod tidy
 go mod download
@@ -197,14 +212,16 @@ fly deploy
 **Symptom:** Fly deploy reports success, but `https://ask-banner.fly.dev/health` returns 502 Bad Gateway.
 
 **Cause:** The app started but crashed before the health check passed. Check logs:
+
 ```bash
 fly logs
 ```
 
 **Most likely causes:**
-1. `RAG_BACKEND_URL` secret not set → adapter crashes on startup with fatal log.
-2. Port mismatch — adapter listening on a different port than `internal_port` in `fly.toml`. Both must be `8080`.
-3. Binary not found — `Dockerfile.adapter` build failed silently.
+
+1. `RAG_BACKEND_URL` secret is not set, so the adapter crashes on startup.
+2. Port mismatch: adapter and `internal_port` in `fly.toml` must both use `8080`.
+3. Binary not found because `Dockerfile.adapter` did not build the expected output.
 
 ---
 
@@ -212,9 +229,11 @@ fly logs
 
 **Symptom:** `fly logs` shows requests arriving, adapter logs show it forwarded to the backend, but Botpress shows an error.
 
-**Cause:** The 30 s `http.Client` timeout in `adapter/client.go` plus network latency exceeds Botpress's Execute Code timeout (default ~10 s).
+**Cause:** Backend latency plus the adapter client timeout exceeds the Botpress Execute Code
+timeout.
 
 **Fix:** Reduce `top_k` to lower backend latency, or adjust Botpress Execute Code timeout:
+
 ```javascript
 // In Botpress Execute Code node
 const r = await axios.post(`${RAG}/chat/ask`, payload, { timeout: 25000 });
@@ -229,6 +248,7 @@ const r = await axios.post(`${RAG}/chat/ask`, payload, { timeout: 25000 });
 **Cause:** New ngrok URL is unreachable (ngrok session expired or wrong URL copied).
 
 **Fix:**
+
 ```bash
 # Confirm ngrok is running and URL is correct
 curl https://<ngrok-url>/health
@@ -245,6 +265,7 @@ fly secrets set RAG_BACKEND_URL=https://<corrected-url>
 **Cause:** axios call threw an error (network issue, 4xx/5xx from adapter) and `r` is undefined.
 
 **Fix:** Wrap the call in try/catch and inspect the error:
+
 ```javascript
 try {
   const r = await axios.post(`${RAG}/chat/ask`, payload, { timeout: 20000 });
@@ -262,10 +283,12 @@ try {
 **Cause:** Environment variable not set in Botpress Cloud.
 
 **Fix:** Botpress Cloud → your bot → **Configuration** → **Environment Variables** → add:
+
 ```
 Key:   RAG_ADAPTER_URL
 Value: https://ask-banner.fly.dev
 ```
+
 Then re-publish the bot (top-right "Publish" button). Environment variables are only picked up on publish, not on save.
 
 ---
@@ -278,7 +301,8 @@ Then re-publish the bot (top-right "Publish" button). Environment variables are 
 
 **Cause B:** Bot is unpublished. Every time you make flow changes in Botpress Studio, you must hit **Publish** or the widget serves the last published version (which may have no flow).
 
-**Cause C:** Browser console shows CORS error. Open DevTools → Console. If Botpress CDN is blocked (e.g., corporate proxy), the script load fails silently.
+**Cause C:** Browser console shows a CORS error. Open DevTools → Console. If the Botpress CDN is
+blocked, for example by a corporate proxy, the script load can fail silently.
 
 **Cause D:** Script tag missing or in the `<head>` instead of before `</body>`. The `inject.js` script must load before `window.botpressWebChat.init()` is called.
 
@@ -302,6 +326,7 @@ Then re-publish the bot (top-right "Publish" button). Environment variables are 
 **Symptom:** Every message classifies as General regardless of content.
 
 **Cause A:** Intent field isn't being passed to `/chat/ask`. Check the Execute Code node:
+
 ```javascript
 // intent must come from a previous /chat/intent call
 const intentResp = await axios.post(`${RAG}/chat/intent`, { message: event.preview });
@@ -316,6 +341,7 @@ const r = await axios.post(`${RAG}/chat/ask`, {
 ```
 
 **Cause B:** Message doesn't contain any classifier keywords. Test the intent endpoint directly:
+
 ```bash
 curl -s -X POST https://ask-banner.fly.dev/chat/intent \
   -H "Content-Type: application/json" \
@@ -333,6 +359,7 @@ curl -s -X POST https://ask-banner.fly.dev/chat/intent \
 **Cause:** Tokens-per-minute (TPM) quota on the deployment exceeded.
 
 **Fix options:**
+
 - Reduce `TOP_K_DEFAULT` in `.env` → fewer chunks → fewer tokens per call.
 - Reduce `CHUNK_SIZE` → smaller chunks → fewer tokens per chunk.
 - Upgrade Azure OpenAI deployment quota in Azure Portal.
@@ -352,6 +379,7 @@ curl -X POST http://localhost:8000/banner/ask \
 **Symptom:** Backend starts but all search calls return 403.
 
 **Cause A:** `AZURE_SEARCH_API_KEY` is wrong or expired.
+
 **Cause B:** Key is a Query key (read-only) but the backend is trying to create the index. Use an Admin key.
 
 ```bash
@@ -378,7 +406,118 @@ curl -s -X POST http://localhost:8000/banner/ingest \
 
 ---
 
-## Confidence and escalation
+## Phase U Upload and Chunking
+
+### Upload succeeds but ask returns no results
+
+**Symptom:** `POST /banner/upload` returns an `upload_id`, but `/banner/ask` still returns no
+sources for that document.
+
+**Cause:** Upload stores the PDF and sidecar only. It does not index pages.
+
+**Fix:**
+
+```bash
+curl -s -X POST http://localhost:8000/banner/upload/chunk \
+  -H "Content-Type: application/json" \
+  -d '{"upload_id":"<upload-id>"}' | jq .
+
+curl -s http://localhost:8000/banner/upload/<upload-id>/status | jq .
+```
+
+Check that `status` is `partial` or `complete` and that `queryable_page_count` is greater than 0.
+
+---
+
+### Upload status returns 404
+
+**Symptom:** `GET /banner/upload/{upload_id}/status` returns 404.
+
+**Cause A:** Wrong `upload_id`.
+
+**Fix:**
+
+```bash
+curl -s http://localhost:8000/banner/upload | jq .
+```
+
+**Cause B:** The sidecar blob was deleted or written to a different Blob prefix/container.
+
+**Fix:** Check `AZURE_STORAGE_CONTAINER_NAME` and `AZURE_STORAGE_BLOB_PREFIX`, then upload the PDF
+again if the sidecar is missing.
+
+---
+
+### URL upload returns 400 "not allowlisted"
+
+**Cause:** The URL host is not in `UPLOAD_URL_ALLOWLIST`.
+
+**Fix:**
+
+```env
+UPLOAD_URL_ALLOWLIST=customercare.ellucian.com,ellucian.com,<your-host>
+```
+
+Restart the backend after changing `.env`.
+
+Nice to know: URL upload requires HTTPS. HTTP URLs are rejected even if the hostname is allowlisted.
+
+---
+
+### URL upload returns 413
+
+**Cause:** The downloaded file exceeds `MAX_UPLOAD_SIZE_MB`.
+
+**Fix options:**
+
+- Raise `MAX_UPLOAD_SIZE_MB` if the server has enough memory and request capacity.
+- Download the PDF manually, split it if needed, and use multipart upload.
+- Prefer staged chunking after upload so indexing can happen in smaller page ranges.
+
+---
+
+### Chunk returns 400 range overlap
+
+**Cause:** Requested `page_start`/`page_end` intersects an already chunked range.
+
+**Fix:**
+
+```bash
+curl -s http://localhost:8000/banner/upload/<upload-id>/status \
+  | jq '{chunked_ranges,unchunked_ranges,gap_summary}'
+```
+
+Choose a range entirely inside one of the `unchunked_ranges`, or omit `page_start` and `page_end`
+to chunk all remaining gaps.
+
+---
+
+### Chunk returns 409 in progress
+
+**Cause:** Another chunk request for the same `upload_id` is active in this API process.
+
+**Fix:** Wait for the active request to finish, then retry. For long PDFs, chunk smaller page ranges
+so each request completes sooner.
+
+---
+
+### Delete does not remove old search results
+
+**Symptom:** After `DELETE /banner/upload/{upload_id}`, old answers can still cite content from the
+deleted PDF.
+
+**Cause:** Delete currently removes the PDF blob and sidecar only. Azure AI Search purge is not
+implemented for Phase U uploads.
+
+**Fix options:**
+
+- Recreate the index and re-ingest the intended corpus.
+- Avoid delete/re-upload for already indexed uploads until exact purge is implemented.
+- Use delete only before chunking, or after a full index rebuild plan.
+
+---
+
+## Confidence and Escalation
 
 ### `escalate` is always `true`
 
@@ -391,9 +530,10 @@ curl -s -X POST http://localhost:8000/banner/ingest \
    curl -s http://localhost:8000/index/stats | jq .document_count
    ```
 
-2. **Azure Search scores are hybrid RRF scores**, which are typically in the range `0.01–0.05`, NOT `0–1`. The escalation threshold in `internal/adapter/client.go` must match this range.
+2. **Azure Search scores are hybrid RRF scores**, which are typically in the range `0.01-0.05`,
+   not `0-1`. The escalation threshold in `internal/adapter/client.go` must match this range.
 
-   > **Current state:** The adapter uses `escalate = retrieval_count == 0 || confidence < [floor]` where the floor is calibrated to the actual score distribution (see `wiki/RUNBOOK.md § Azure AI Search Score Distribution`). A score of `0.033` with sources present is a **good answer** — do not treat it as low confidence.
+   > **Current state:** The adapter uses `escalate = retrieval_count == 0 || confidence < [floor]` where the floor is calibrated to the actual score distribution. See `wiki/RUNBOOK.md` § Azure AI Search Score Distribution. A score of `0.033` with sources present is a good answer; do not treat it as low confidence.
 
    **If escalate is firing on valid answers:**
    - Check `confidence` in the `/chat/ask` response — if it's `0.01–0.05` with sources, the threshold floor is too high.
@@ -415,6 +555,7 @@ curl -s -X POST http://localhost:8000/banner/ingest \
 **Cause:** The message being analyzed is `event.preview` (the display-safe version) rather than the raw message body, and Botpress may truncate or sanitize it.
 
 **Fix:** Check what you're passing to `/chat/sentiment`:
+
 ```javascript
 // Log the message before sending
 console.log('sentiment input:', event.preview);
@@ -425,13 +566,14 @@ If `event.preview` is being sanitized, try `event.payload.text` instead.
 
 ---
 
-## Test suite issues
+## Test Suite Issues
 
 ### Race condition failures (`-race`)
 
 **Symptom:** `go test ./... -v -race` fails intermittently with `DATA RACE` on Windows.
 
 **Cause:** CGO_ENABLED=0 disables the race detector on Windows. Build without `-race` to confirm tests pass functionally:
+
 ```bash
 go test ./... -v
 ```

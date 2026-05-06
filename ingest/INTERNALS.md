@@ -10,27 +10,32 @@ Covers *why* decisions were made, *how* things work internally, and *when* thing
 1. [Design Philosophy](#design-philosophy)
 2. [Why Go?](#why-go)
 3. [Package Responsibilities](#package-responsibilities)
-4. [Data Flow: Phase U Upload/Chunk Pipeline](#data-flow-phase-u-uploadchunk-pipeline)
-5. [Data Flow: Ingestion Pipeline](#data-flow-ingestion-pipeline)
-6. [Data Flow: RAG Query Pipeline](#data-flow-rag-query-pipeline)
+4. [Data Flow: Ingestion Pipeline](#data-flow-ingestion-pipeline)
+   - [Phase U: Upload/Chunk entry points](#phase-u-entry-points-uploadchunk-path)
+5. [Data Flow: RAG Query Pipeline](#data-flow-rag-query-pipeline)
    - [Auto-routing mode](#auto-routing-mode)
    - [Module-scoped routing](#module-scoped-routing)
    - [Student User Guide Pipelines](#student-user-guide-pipelines)
-7. [Chunking Strategies](#chunking-strategies)
-8. [Azure Search Index Design](#azure-search-index-design)
-9. [Why Direct HTTP (No Azure Go SDK)?](#why-direct-http-no-azure-go-sdk)
-10. [DOCX Parsing Without External Libraries](#docx-parsing-without-external-libraries)
-11. [Metadata Extraction from File Paths](#metadata-extraction-from-file-paths)
-12. [Deterministic Chunk IDs](#deterministic-chunk-ids)
-13. [Prompt Construction](#prompt-construction)
-14. [Rate Limit Handling](#rate-limit-handling)
-15. [Config: Fail Fast vs. Graceful](#config-fail-fast-vs-graceful)
-16. [gRPC: Why It Exists and Its Current State](#grpc-why-it-exists-and-its-current-state)
-17. [Known Limitations and Gotchas](#known-limitations-and-gotchas)
-18. [Where Things Can Go Wrong](#where-things-can-go-wrong)
-19. [How to Extend](#how-to-extend)
-20. [Testing Gaps](#testing-gaps)
-21. [Performance Notes](#performance-notes)
+6. [Chunking Strategies](#chunking-strategies)
+7. [Azure Search Index Design](#azure-search-index-design)
+8. [Why Direct HTTP (No Azure Go SDK)?](#why-direct-http-no-azure-go-sdk)
+9. [DOCX Parsing Without External Libraries](#docx-parsing-without-external-libraries)
+10. [Metadata Extraction from File Paths](#metadata-extraction-from-file-paths)
+11. [Deterministic Chunk IDs](#deterministic-chunk-ids)
+12. [Prompt Construction](#prompt-construction)
+13. [Rate Limit Handling](#rate-limit-handling)
+14. [Config: Fail Fast vs. Graceful](#config-fail-fast-vs-graceful)
+15. [gRPC: Why It Exists and Its Current State](#grpc-why-it-exists-and-its-current-state)
+16. [Known Limitations and Gotchas](#known-limitations-and-gotchas)
+17. [Where Things Can Go Wrong](#where-things-can-go-wrong)
+18. [How to Extend](#how-to-extend)
+    - [Add a New Document Type](#add-a-new-document-type)
+    - [Add a New Summarization Topic](#add-a-new-summarization-topic)
+    - [Add Authentication](#add-authentication)
+    - [Add Streaming Responses](#add-streaming-responses)
+    - [Add the Phase U Upload/Chunk Handler](#add-the-phase-u-uploadchunk-handler)
+19. [Testing Gaps](#testing-gaps)
+20. [Performance Notes](#performance-notes)
 
 ---
 
@@ -74,9 +79,9 @@ The language choice matters for how the code is structured.
 config/              → Loads env vars once. No logic. Panics if required vars are absent.
 internal/azure/      → Thin HTTP clients for Azure services only: OpenAI, AI Search, Blob Storage.
 internal/websearch/  → Web search clients: Bing and Tavily. WebSearcher interface lives here.
-internal/ingest/     → Document pipeline: walk files → extract text → chunk → embed → upload.
-internal/upload/     → Phase U upload services: metadata validation, sidecar range math,
-                       sidecar CRUD, URL allowlist checks, chunk orchestration, delete/status/list.
+internal/ingest/     → Document pipeline: walk files → extract text → chunk → embed → upload to Search.
+internal/upload/     → Phase U upload/chunk services: sidecar range math, sidecar CRUD, chunk dispatch.
+                        Depends on explicit seams for Blob Storage and ingest execution.
 internal/rag/        → Query pipeline: embed question → hybrid search → build prompt → chat.
 internal/api/        → HTTP handlers and Gin router. Handlers are thin — delegate to rag/ingest/upload.
 internal/grpcserver/ → gRPC handlers. Scaffolded, not fully implemented.
@@ -87,81 +92,15 @@ proto/               → Service contracts. Source of truth for gRPC interface.
 **Dependency direction** (strict, no cycles):
 
 ```
-cmd → internal/api → internal/rag → internal/azure
+cmd → internal/api → internal/rag    → internal/azure
                    → internal/ingest → internal/azure
-                                     → internal/azure/openai (for embedding)
-                   → internal/upload → internal/blobstore
-                                     → internal/ingest (through injected IngestRunner only)
+                   → internal/upload → internal/azure (Blob)
+                                     → internal/ingest (calls Run() for chunk step)
 config ← everything (leaf dependency, imports nothing internal)
 ```
 
 If you add a dependency that goes the other direction (e.g., `azure` importing `ingest`), you've
 introduced a cycle and it won't compile.
-
----
-
-## Data Flow: Phase U Upload/Chunk Pipeline
-
-Phase U exists for cloud deployments where operators cannot place files under `data/docs/`.
-It is intentionally decoupled: upload stores the PDF and creates a sidecar, while chunking is
-a separate call that indexes selected page ranges.
-
-**Upload routes:**
-
-```
-POST /banner/upload
-  internal/api.BannerUpload()
-  → internal/upload.CreateUploadFromFile()
-  → validate metadata and PDF-only extension
-  → synthesize Blob path
-  → count pages with ingest.CountPages()
-  → write PDF to Blob
-  → write {blob_path}.chunks.json with status=pending and chunking_pattern=none
-
-POST /banner/upload/from-url
-  internal/api.BannerUploadFromURL()
-  → internal/upload.CreateUploadFromURL()
-  → require HTTPS and UPLOAD_URL_ALLOWLIST hostname
-  → bounded download with MAX_UPLOAD_SIZE_MB
-  → same CreateUploadFromFile() path after download
-```
-
-Upload routes do not call Azure OpenAI, Azure AI Search, or `ingest.Run()`. A successful upload
-is not queryable until a chunk request completes.
-
-**Chunk/status/list/delete routes:**
-
-```
-POST /banner/upload/chunk
-  → resolve upload_id by scanning sidecars
-  → reject overlapping or out-of-bounds ranges
-  → if no range, process all unchunked ranges in ascending order
-  → download PDF Blob to a temporary local path
-  → call ingest.Run() for each selected page range
-  → write sidecar after each successful gap
-
-GET /banner/upload/{upload_id}/status
-  → read sidecar and return derived status, gaps, queryable_page_count, remaining estimate
-
-GET /banner/upload
-  → list sidecar summaries sorted by uploaded_at descending
-
-DELETE /banner/upload/{upload_id}
-  → delete PDF Blob and sidecar only
-```
-
-Phase U upload accepts only `.pdf` files with `source_type=banner` or
-`source_type=banner_user_guide`. SOP, DOCX, TXT, and Markdown upload are deferred and rejected
-before Blob or sidecar writes.
-
-Sidecars live at `{blob_path}.chunks.json`. `unchunked_ranges`, `status`,
-`chunking_pattern`, `gap_count`, and `gap_summary` are derived from `total_pages` and
-`chunked_ranges`; callers should not treat those fields as source-of-truth input.
-
-`DELETE /banner/upload/{upload_id}?purge_index=true` returns 501 and leaves storage untouched
-until uploaded chunk IDs are reliably persisted and a tested Azure Search purge path exists.
-
----
 
 ## Data Flow: Ingestion Pipeline
 
@@ -213,6 +152,39 @@ Run(docsPath, overwrite, pagesPerBatch, startPage, endPage)
 ---
 
 ## Data Flow: RAG Query Pipeline
+
+**Phase U entry points (upload/chunk path):**
+
+```
+POST /banner/upload         → internal/api/handlers.go → BannerUpload()
+                              internal/upload/service.go → CreateUploadFromFile()
+                              Writes PDF to Blob, extracts page count, creates sidecar JSON blob.
+                              Does NOT call ingest.Run().
+
+POST /banner/upload/from-url → internal/api/handlers.go → BannerUploadFromURL()
+                              internal/upload/service.go → CreateUploadFromURL()
+                              Downloads PDF from allowlisted HTTPS URL, then same as CreateUploadFromFile().
+
+POST /banner/upload/chunk   → internal/api/handlers.go → BannerUploadChunk()
+                              internal/upload/chunk.go → ChunkUpload()
+                              Reads sidecar, downloads PDF from Blob for the requested page range,
+                              calls ingest.Run() via the injected upload.IngestRunner,
+                              appends to sidecar chunked_ranges, recomputes unchunked_ranges.
+                              Iterates all unchunked_ranges when no page range specified.
+
+GET  /banner/upload/{id}/status → internal/api/handlers.go → BannerUploadStatus()
+                              Reads sidecar from Blob. Returns chunked/unchunked ranges,
+                              chunking_pattern, gap_count, gap_summary, estimated_remaining_minutes.
+
+GET  /banner/upload       → internal/api/handlers.go → BannerUploadList()
+                              Lists sidecar summaries sorted by uploaded_at descending.
+```
+
+**Sidecar location:** `{blob_path}.chunks.json` — adjacent to the PDF in the same container.
+**`unchunked_ranges`** is always recomputed on write from `total_pages` minus the union of all
+`chunked_ranges` intervals. Never trusted from caller input.
+**Overlap check:** rejects range `[s, e]` if any existing `[s2, e2]` satisfies `s <= e2 AND e >= s2`.
+
 
 Entry: `POST /banner/ask`, `POST /banner/{module}/ask`, or `POST /sop/ask`
 Handler: `internal/api/handlers.go` → `BannerAsk()`, `ModuleAsk()`, or `SopAsk()`
@@ -453,10 +425,6 @@ name (e.g., `"Heading 1"`). The code looks up the display name in `styles.xml` t
 Banner PDF metadata (module, version, year) is extracted entirely from the file path. No PDF
 metadata parsing is done.
 
-This section applies to folder ingest and to the temporary local path created by Phase U chunking.
-Phase U upload itself uses explicit request metadata to synthesize the canonical Blob path before
-any ingest pipeline call runs.
-
 **Why:** Ellucian Banner release note PDFs embed metadata inconsistently. Parsing the filename and
 folder structure is more reliable.
 
@@ -490,7 +458,7 @@ IDs = different documents in the index).
 **Why not sequential integers?** Race conditions if parallel ingestion is ever added. Also fragile
 across restarts.
 
-**Solution:** `MD5(filename + "|" + pageNumber + "|" + chunkIndex)`
+**Solution:** `MD5(filename + "::p" + pageNumber + "::c" + chunkIndex)`
 
 This means:
 - Same file + same page + same chunk index = same ID → safe re-ingest (updates in place)
@@ -634,23 +602,20 @@ Uncommenting the imports before the files exist would break compilation for anyo
 ### 1. PDF Text Extraction Quality
 
 `github.com/ledongthuc/pdf` extracts text directly from PDF character streams. It works well for
-text-layer PDFs, but scanned PDFs and some unusually encoded PDFs can yield garbled or empty text:
+text-based PDFs but will produce garbage or empty output for:
 - Scanned PDFs (image-based) — no OCR is performed
 - PDFs with unusual encoding or embedded fonts that remap character codes
 
-**Symptom:** Garbled chunks or PDFs that contribute no text to the index.
+**Symptom:** Chunks with garbage characters or empty text in the index.
 
-**Detecting likely scanned PDFs before ingest:**
-- Open the PDF in a viewer and try to select text. If you cannot select text, it is likely scanned.
-- Preflight heuristic: if the file is under roughly 30 KB/page, treat it as a likely bad candidate for the current parser and inspect it manually before ingest.
-- Run `POST /banner/ingest` with `dry_run=true`. For each PDF with one or more pages but zero text-extractable pages, the response adds `"no pages extracted — may be scanned PDF"` to that file's `warnings`.
+**Detecting scanned PDFs before ingest:**
+- Open the PDF in a viewer and try to select text — if you can't, it's scanned
+- Size heuristic: scanned PDFs are typically >200 KB/page; text-layer PDFs are 20–80 KB/page
+- The dry-run mode (`POST /banner/ingest` with `dry_run=true`, Phase L.2) reports `"no pages extracted — may be scanned PDF"` as a warning for any PDF where `extractPDFPages()` returns 0 text pages
 
 **Fix options:**
-- **Azure AI Document Intelligence (Layout API):**
-  1. Send the PDF to the Layout endpoint so Azure performs OCR and reconstructs reading order.
-  2. Export the returned markdown or plain text to a `.txt` file next to the original PDF.
-  3. Review the extracted text for tables, headers, and page breaks that may need cleanup.
-  4. Ingest the `.txt` file instead of the original PDF.
+- **Azure AI Document Intelligence (Layout API):** Send the PDF to the Layout endpoint; it returns
+  markdown-structured text with OCR. Save the result as `.txt` and ingest the `.txt` file instead.
   See [Azure AI Document Intelligence docs](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/).
 - **Adobe Acrobat:** Run "Recognize Text" (OCR) on the PDF to create a searchable version
   before ingesting.
@@ -701,20 +666,33 @@ try to build the gRPC server without running `buf generate` first, it will fail 
 grpcserver package imports anything from `gen/go/`. Currently the imports are commented out to
 prevent this.
 
-### 8. Phase U Sidecar Is Authoritative
+### 8. Phase U Sidecar Is the Only Persistent Upload State
 
-Upload/chunk state lives only in `{blob_path}.chunks.json`. If that sidecar is missing or corrupt,
-the PDF may still exist in Blob Storage, but status/list/chunk/delete cannot track it by
-`upload_id`. Re-upload or repair the sidecar manually.
+The Phase U upload/chunk path stores all state in a sidecar JSON blob adjacent to the PDF in
+Blob Storage. There is no database, no queue, no job tracker. This means:
 
-Chunk concurrency is guarded with a process-local lock. Two chunk calls for the same `upload_id`
-in the same API process return 409, but this is not a cross-instance Azure Blob lease.
+- If the sidecar blob is deleted or corrupted, the chunking state for that document is lost.
+  The PDF itself remains in Blob Storage but there is no way to know which pages were already
+  chunked without re-reading the Azure Search index directly.
+- Concurrent chunk calls for the same `upload_id` are rejected with 409 inside a single API
+  process to prevent race conditions on sidecar writes. This is a process-local guard, not a
+  cross-replica Blob lease.
+- The sidecar write is atomic per gap — if a chunk-all-remaining call processes 3 gaps and
+  fails during gap 2, gap 1 is durably recorded and gap 3 is still pending. Gap 2 may be
+  partially indexed in Azure Search (chunks uploaded before the failure) with no corresponding
+  sidecar record. Reissuing the call re-chunks gap 2 from the start; deterministic chunk IDs
+  prevent duplicates via Azure Search's merge-or-upload
+  semantics.
+- `DELETE /banner/upload/{upload_id}` removes only the PDF blob and sidecar. It does not purge
+  Azure Search chunks. `purge_index=true` returns 501 and leaves storage unchanged until chunk IDs
+  are reliably persisted and a tested purge seam exists.
 
-`DELETE /banner/upload/{upload_id}` deletes the PDF and sidecar only. It does not purge Azure
-Search chunks, and `purge_index=true` returns 501 until exact purge support is implemented.
+### 9. `ingest.CountPages()` Is Required for Phase U Upload
 
-Successful upload is not queryable. Queryability starts only after `POST /banner/upload/chunk`
-completes for one or more page ranges.
+`POST /banner/upload` needs the total page count at upload time to initialise the sidecar.
+This requires a new `ingest.CountPages(filePath string) (int, error)` function that reads a
+PDF's page count without chunking. It uses the same `ledongthuc/pdf` reader already in use.
+Until this function is added, the upload handler cannot create a valid sidecar.
 
 ---
 
@@ -734,6 +712,11 @@ completes for one or more page ranges.
 | All SOP data missing after banner ingest | `overwrite: true` was used | Recreate index and re-ingest SOPs |
 | `required environment variable X is not set` | `.env` file missing or incomplete | `config/config.go` |
 | Swagger UI returns 404 | `docs/` not generated | Run `go generate ./internal/api/` |
+| `POST /banner/upload` returns 409 | PDF already exists at synthesized blob path | `GET /banner/upload` to find existing `upload_id`, or `DELETE` and re-upload |
+| `POST /banner/upload/chunk` returns 404 | `upload_id` sidecar missing from Blob (container restart, manual delete) | Re-upload the PDF |
+| `POST /banner/upload/chunk` returns 400 range overlap | Requested range intersects a `chunked_ranges` entry | `GET /banner/upload/{id}/status` to see current ranges |
+| `POST /banner/upload/chunk` returns 409 chunk in progress | Another chunk call for this `upload_id` is active in the same API process | Wait for the active call to finish, then retry |
+| Upload succeeds but ask returns 0 results | Chunk call never ran, wrong `module_filter`, or `chunking_pattern=sparse` | `GET /banner/upload/{id}/status` — check `status` and `gap_summary` |
 | gRPC server fails to start | `gen/go/` missing | Run `buf generate` |
 
 ---
@@ -787,27 +770,86 @@ This is the highest-impact UX improvement for the ask endpoints.
 
 ---
 
+
+### Add the Phase U Upload/Chunk Handler
+
+The upload/chunk path is a separate handler layer that wraps the existing `ingest.Run()`.
+No changes to the ingest pipeline are required.
+
+1. Create `internal/upload/` package with:
+   - `types.go`, `service.go`, `range_math.go`, `metadata.go` — `SidecarState`,
+     `ReadSidecar()`, `WriteSidecar()`, `SidecarPath()`, `ListUploads()`,
+     `ComputeUnchunkedRanges()`, `CheckOverlap()`, `ComputePattern()`,
+     `GapSummary()`, `ValidateUploadMetadata()`, `SynthesizeBlobPath()`
+   - API handlers — multipart parsing lives in `internal/api`; upload orchestration lives in
+     `internal/upload/service.go`
+
+2. `BannerUpload()` / `CreateUploadFromFile()` flow:
+   - Validate fields (source_type, module, version/year rules)
+   - Synthesize blob path from metadata
+   - Check for existing blob at that path (409 if exists)
+   - Extract total page count using `ingest.CountPages()`
+   - Write PDF to Blob via `internal/azure/blob.go`
+   - Create initial sidecar (`status=pending`, `chunking_pattern=none`, `chunked_ranges=[]`)
+   - Write sidecar to `{blob_path}.chunks.json`
+   - Return `upload_id`, `blob_path`, `total_pages`, `status`, `chunking_pattern`,
+     `gap_count`, `gap_summary`, and `message`
+
+3. `ChunkPages()` flow:
+   - Read sidecar by `upload_id`
+   - Resolve page range: if no `page_start`/`page_end`, iterate all `unchunked_ranges`
+   - For each range: validate bounds, run overlap check, download PDF slice from Blob,
+     call `ingest.Run()` with `startPage`/`endPage`, append to `chunked_ranges`
+   - After each gap: `WriteSidecar()` with recomputed `unchunked_ranges`, `chunking_pattern`,
+     `gap_count`, `gap_summary`
+   - Return updated sidecar fields plus `gaps_processed`, `gaps_remaining`
+
+4. Wire routes in `internal/api/router.go`:
+   ```go
+   upload := r.Group("/banner/upload")
+   {
+       upload.POST("",              uploadHandler.UploadPDF)
+       upload.POST("/from-url",     uploadHandler.UploadFromURL)
+       upload.POST("/chunk",        uploadHandler.ChunkPages)
+       upload.GET("",               uploadHandler.ListUploads)
+       upload.GET("/:id/status",    uploadHandler.ChunkingStatus)
+       upload.DELETE("/:id",        uploadHandler.DeleteUpload)
+   }
+   ```
+
+5. `ingest.CountPages(filePath string) (int, error)` — new function needed in
+   `internal/ingest/ingest.go`. Reads the PDF page count without chunking. Uses the
+   same `ledongthuc/pdf` reader already in use.
+
 ## Testing Gaps
 
 **What's tested:**
 - `internal/ingest/docx_test.go` — DOCX paragraph extraction (unit)
 - `internal/ingest/sop_chunker_test.go` — SOP section chunking (unit)
 - `internal/ingest/sop_test.go` — SOP filename parsing (unit)
-- `internal/upload/*_test.go` — Phase U metadata validation, URL allowlist checks,
-  sidecar range math, sidecar persistence, chunk orchestration, locks, status/list/delete
-- `internal/api/upload_*_test.go` — Phase U upload/chunk/status/list/delete handler behavior
-  with fake Blob, fake page counter, fake ingest runner, fake clock, and fake IDs
-- `internal/api/upload_workflow_test.go` — offline route workflow coverage for multipart upload,
-  URL upload, status, chunk, list, delete, sparse gaps, and no indexing before chunk
+- `internal/api/upload_workflow_test.go` — offline upload route workflows using fake Blob,
+  fake ingest, fake clock, fake UUID, fake page counter, and fake URL downloader
 
 **What's not tested (and why it's hard):**
 - Azure clients — require live Azure credentials; no mock layer exists
 - RAG pipeline — depends on Azure OpenAI + Azure Search; would need dependency injection to mock
 - End-to-end ingestion — requires a real file system + Azure Search index
 
+**Phase U upload/chunk — additional gaps:**
+- `internal/upload/range_math.go` and `internal/upload/service.go` cover the pure sidecar math and
+  sidecar persistence helpers. They are unit tested with fake Blob storage.
+- `internal/api/upload_*_test.go` covers upload/chunk/status/list/delete handler behavior with
+  injected fakes and no Azure credentials.
+- Sidecar atomic write — test that a simulated failure mid-gap leaves the sidecar in a valid state
+  (completed gaps recorded, failed gap absent, `unchunked_ranges` correct).
+- Overlap detection edge cases — exact adjacency (`end=50`, `start=51` should pass), exact duplicate
+  range, single-page range overlapping a multi-page range.
+
 **Offline route integration tests:**
 - `go test ./internal/api/... -run UploadWorkflow -v`
-- Uses `httptest` and fake dependencies; no live Azure, public network, OpenAI, or Search calls.
+- Covers multipart upload → status → chunk → status → list → delete.
+- Covers URL upload → status → chunk all remaining.
+- Covers sparse partial chunking and verifies upload/status/list do not index before chunk.
 
 **If you want to add live integration tests:**
 - Use a separate `.env.test` pointing at a test Azure Search index

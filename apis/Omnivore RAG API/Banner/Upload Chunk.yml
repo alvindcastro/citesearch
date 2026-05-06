@@ -1,0 +1,24 @@
+info:
+  name: Upload Chunk
+  type: http
+  seq: 12
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/upload/chunk"
+  body:
+    type: json
+    data: |-
+      {
+        "upload_id": "{{upload_id}}",
+        "page_start": 1,
+        "page_end": 50,
+        "pages_per_batch": 10
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5

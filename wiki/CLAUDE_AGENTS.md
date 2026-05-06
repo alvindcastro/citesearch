@@ -24,9 +24,12 @@ Each agent wraps the existing HTTP API as tools — no changes to the Go backend
 15. [Agent 14: Answer Grounding Verifier Agent](#agent-14-answer-grounding-verifier-agent)
 16. [Agent 15: Analytics Advisor Agent](#agent-15-analytics-advisor-agent)
 17. [Agent 16: Feedback Pattern Analyst Agent](#agent-16-feedback-pattern-analyst-agent)
-18. [Tool Reference: API-to-Tool Mapping](#tool-reference-api-to-tool-mapping)
-19. [Implementation Notes](#implementation-notes)
-20. [Priority Recommendation](#priority-recommendation)
+18. [Agent 17: PDF Ingest Preflight Auditor Agent](#agent-17-pdf-ingest-preflight-auditor-agent)
+19. [Agent 18: Document Upload Coordinator Agent](#agent-18-document-upload-coordinator-agent)
+20. [Agent 19: Upload Chunking Wizard Agent](#agent-19-upload-chunking-wizard-agent)
+21. [Tool Reference: API-to-Tool Mapping](#tool-reference-api-to-tool-mapping)
+22. [Implementation Notes](#implementation-notes)
+23. [Priority Recommendation](#priority-recommendation)
 
 ---
 
@@ -2146,6 +2149,566 @@ Re-run after Finance AR PDFs are ingested or after 50+ new feedback entries accu
 
 ---
 
+## Agent 17: PDF Ingest Preflight Auditor Agent
+
+**Purpose:** Before triggering an expensive ingest run, validate that every document in
+`data/docs/banner` or `data/docs/sop` is correctly placed, named, and extractable. Reports
+metadata warnings, estimates ingestion time, and cross-references the live index to show which
+files are likely new vs. already indexed.
+
+**Use case:** An operator is about to ingest 15 new Banner release note PDFs. Instead of waiting
+90 minutes only to find that half of them have wrong module tags, they run Agent 17 first.
+The agent catches a misnamed folder, a scanned PDF, and two files missing version strings —
+all before a single embedding call is made.
+
+**Type:** One-shot report agent. Calls `ingest_dryrun` + `index_stats` + `debug_chunks`.
+Returns a Markdown report.
+
+**Requires:** Phase L.2 (dry-run mode) deployed on the backend.
+
+**Current backend limitation:** Exact file-vs-index matching is not available yet. Agent 17 uses
+the filename sample from `GET /debug/chunks` as a best-effort signal. If a filename is observed
+there, mark it **likely indexed**; otherwise mark it **not observed** and treat it as a likely
+candidate for ingest. This is advisory until a dedicated "list indexed files" endpoint exists.
+
+**Recommended model:** `claude-haiku-4-5` — report generation from structured data, no reasoning required.
+
+---
+
+### Tools
+
+```python
+PREFLIGHT_TOOLS = [
+    {
+        "name": "ingest_dryrun",
+        "description": (
+            "Scan a docs folder for ingestable files and validate them without embedding or uploading. "
+            "Returns per-file metadata (module, version, year, source_type, estimated chunks, warnings)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "docs_path": {
+                    "type": "string",
+                    "description": "Path to the folder to scan, e.g. 'data/docs/banner'"
+                },
+            },
+            "required": ["docs_path"],
+        },
+    },
+    {
+        "name": "index_stats",
+        "description": "Get current index statistics: index name and total document count.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "debug_chunks",
+        "description": (
+            "Get a sample of indexed chunk metadata, including filenames, source types, modules, and versions. "
+            "Use this as a best-effort signal for whether a file has already been seen in the index."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+```
+
+### System Prompt
+
+```python
+PREFLIGHT_SYSTEM = """You are a PDF ingest preflight auditor for the citesearch Banner ERP knowledge base.
+
+Your job is to assess the readiness of a document collection for ingestion and produce a clear,
+actionable Markdown report before any embedding calls are made.
+
+Protocol:
+1. Call `ingest_dryrun` with the target docs_path to get the file list and metadata.
+2. If `ingest_dryrun` returns zero files, produce a short empty-folder report and stop.
+3. Call `index_stats` to get the current index size.
+4. Call `debug_chunks` to get observed filenames from the live index.
+5. Cross-reference rule: match by basename only.
+   - If a file basename appears in `debug_chunks`, mark it `likely indexed`.
+   - If it does not appear, mark it `not observed in debug sample`.
+   - If `debug_chunks` is unavailable, mark status `index comparison unavailable` and continue.
+6. Identify files WITH warnings (missing module, missing version, scanned PDF, SOP naming mismatch).
+7. Produce the report in this exact structure:
+
+## Preflight Report — [docs_path] — [date]
+
+### Summary
+- Files found: N
+- Likely new / not observed: N
+- Likely indexed: N
+- Files with warnings: N
+- Estimated ingest time (clean, likely-new files only): N minutes
+- Index comparison: available | unavailable
+
+### File Status Table
+| File | Index Status | Module | Version | Year | Source Type | Chunks (est.) | Warnings |
+|------|--------------|--------|---------|------|-------------|---------------|----------|
+
+(One row per file. Index Status must be one of: `likely indexed`, `not observed`, `comparison unavailable`.
+Warnings column: `✓ clean` or comma-separated warning codes.)
+
+### Warning Details
+(Only include this section if any file has warnings)
+For each file with warnings, explain the warning and the exact fix required.
+
+### Action Plan
+1. [Fix this warning first — blocks ingest of specific file]
+2. [Ingest these files — no warnings, estimated time X min]
+3. [Lower priority — already indexed or optional]
+
+Rules:
+- A missing module always blocks ingest (chunks will be unfindable by module_filter).
+- A missing version on a release note PDF is a warning but not a blocker.
+- A missing version on a user_guide PDF is expected and not a warning.
+- A missing year on a release note PDF is a warning and should usually be fixed before ingest.
+- A scanned PDF (0 pages extracted) must be pre-processed before ingest — do not include in time estimate.
+- SOP naming mismatches mean the file will be silently skipped — always flag as a blocker.
+- If `debug_chunks` or `index_stats` fails, say so explicitly and produce a preflight-only report rather than guessing.
+"""
+```
+
+### Implementation
+
+```python
+def run_preflight_tool(tool_name: str, tool_input: dict) -> str:
+    if tool_name == "ingest_dryrun":
+        return json.dumps(call_api("POST", "/banner/ingest", {**tool_input, "dry_run": True}))
+    if tool_name == "index_stats":
+        return json.dumps(call_api("GET", "/index/stats"))
+    if tool_name == "debug_chunks":
+        return json.dumps(call_api("GET", "/debug/chunks"))
+    return json.dumps({"error": "unknown tool"})
+
+
+def observed_filenames(debug_chunks: list[dict]) -> set[str]:
+    """Best-effort filename inventory from the debug chunk sample."""
+    out = set()
+    for row in debug_chunks:
+        name = row.get("filename")
+        if name:
+            out.add(name)
+    return out
+
+
+def preflight_agent(docs_path: str) -> str:
+    """Run a full preflight audit for the given docs_path. Returns a Markdown report."""
+    messages = [
+        {
+            "role": "user",
+            "content": f"Run a preflight audit for: {docs_path}"
+        }
+    ]
+    while True:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=2048,
+            system=PREFLIGHT_SYSTEM,
+            tools=PREFLIGHT_TOOLS,
+            messages=messages,
+        )
+        if response.stop_reason == "end_turn":
+            return next(b.text for b in response.content if b.type == "text")
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = run_preflight_tool(block.name, dict(block.input))
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": result,
+                })
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+```
+
+### Example Output
+
+```markdown
+## Preflight Report — data/docs/banner — 2026-04-23
+
+### Summary
+- Files found: 4
+- Likely new / not observed: 2
+- Likely indexed: 2
+- Files with warnings: 1
+- Estimated ingest time (clean, likely-new files only): ~12 minutes
+- Index comparison: available (`/debug/chunks` filename sample)
+
+### File Status Table
+| File | Index Status | Module | Version | Year | Source Type | Chunks (est.) | Warnings |
+|------|--------------|--------|---------|------|-------------|---------------|----------|
+| Banner_General_Release_Notes_9.3.37.2_February_2026.pdf | likely indexed | General | 9.3.37.2 | 2026 | banner | 70 | ✓ clean |
+| Banner_Finance_Release_Notes_9.3.22.pdf | not observed | Finance | 9.3.22 | — | banner | 55 | ⚠ year not detected |
+| Banner General - Use - Ellucian.pdf | likely indexed | General | — | — | banner_user_guide | 900 | ✓ clean (user guide — no version expected) |
+| SOP154_Procedure_Axiom.docx | not observed | — | — | — | sop | — | ❌ SOP naming mismatch — will be skipped |
+
+### Warning Details
+
+**Banner_Finance_Release_Notes_9.3.22.pdf — year not detected**
+The file is under `data/docs/banner/finance/releases/` but not inside a year subfolder.
+Fix: Move to `data/docs/banner/finance/releases/2026/Banner_Finance_Release_Notes_9.3.22.pdf`.
+
+**SOP154_Procedure_Axiom.docx — SOP naming mismatch**
+Filename uses underscores instead of ` - ` separator. File will be silently skipped.
+Fix: Rename to `SOP154 - Procedure Axiom.docx`.
+
+### Action Plan
+1. ❌ **Fix SOP154 filename** — rename before running SOP ingest (file is completely invisible otherwise)
+2. ⚠ **Move Finance release note** to a year subfolder to get year metadata (optional but recommended)
+3. ✅ **Ingest Finance release note after path fix** — likely new, ~28 seconds
+4. ℹ **General release note already appears indexed** — skip unless re-ingest needed
+5. ℹ **General user guide already appears indexed** — skip unless re-ingest needed
+```
+
+---
+
+## Agent 18: Document Upload Coordinator Agent
+
+**Purpose:** Conversationally guide an operator through uploading a new PDF to the knowledge base
+without requiring filesystem access. Determines the correct metadata from context, chooses between
+multipart upload and URL-based upload, then returns the `upload_id` needed for chunking.
+
+**Use case:** An IT admin in Botpress or a CLI says "I need to add the Banner Finance 9.3.22 release
+notes" — Agent 18 asks for the file or URL, validates the source_type and module, triggers the
+upload, and explains that the document is not queryable until chunking completes. No SSH, no
+filesystem access on the citesearch server, no manual Azure Blob setup required.
+
+**Type:** Multi-turn guided workflow agent. 2–5 tool calls per session.
+
+**Requires:** Phase U upload routes deployed on the citesearch backend.
+
+**Recommended model:** `claude-haiku-4-5` — guided workflow with structured tool calls.
+
+**Coordination:** Agent 18 owns upload metadata collection and Blob/sidecar creation. Agent 19 owns
+chunking and verification. Do not promise retrieval from Agent 18 alone.
+
+---
+
+### Tools
+
+```python
+UPLOAD_TOOLS = [
+    {
+        "name": "banner_upload_file",
+        "description": (
+            "Upload a PDF from a local path to Blob Storage and create a sidecar. "
+            "This does not chunk or index the PDF."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "file_path":    {"type": "string", "description": "Local path to the file to upload"},
+                "source_type":  {"type": "string", "enum": ["banner", "banner_user_guide"]},
+                "module":       {"type": "string", "description": "Banner module: General, Finance, Student, etc."},
+                "version":      {"type": "string", "description": "e.g. 9.3.22 — only for release notes"},
+                "year":         {"type": "string", "description": "e.g. 2026 — only for release notes"},
+            },
+            "required": ["file_path", "source_type", "module"],
+        },
+    },
+    {
+        "name": "banner_upload_from_url",
+        "description": (
+            "Download a PDF from an allowlisted HTTPS URL to Blob Storage and create a sidecar. "
+            "This does not chunk or index the PDF."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url":          {"type": "string"},
+                "source_type":  {"type": "string", "enum": ["banner", "banner_user_guide"]},
+                "module":       {"type": "string"},
+                "version":      {"type": "string"},
+                "year":         {"type": "string"},
+            },
+            "required": ["url", "source_type", "module"],
+        },
+    },
+    {
+        "name": "upload_status",
+        "description": "Read sidecar status for an uploaded PDF.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "upload_id": {"type": "string"},
+            },
+            "required": ["upload_id"],
+        },
+    },
+    {
+        "name": "upload_list",
+        "description": "List tracked uploads and chunking summaries.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+]
+```
+
+### System Prompt
+
+```python
+UPLOAD_COORDINATOR_SYSTEM = """You are a Banner ERP document upload coordinator.
+Your job is to guide an operator through uploading a new PDF into citesearch Blob Storage
+without requiring SSH or filesystem access on the backend server.
+
+Workflow:
+1. Understand what the operator wants to add (release notes or user guide).
+2. Determine required fields:
+   - source_type: release notes -> "banner"; how-to user guide -> "banner_user_guide"
+   - module: which Banner module (General, Finance, Student, HR, etc.) — ask if unclear
+   - version: ONLY for release notes (e.g. 9.3.22) — NOT for user guides
+   - year: ONLY for release notes (e.g. 2026) — NOT for user guides
+3. Ask: does the operator have a local file path, or a download URL?
+   - Local file → use banner_upload_file
+   - URL (must be HTTPS, from ellucian.com) → use banner_upload_from_url
+4. Perform the upload (banner_upload_file or banner_upload_from_url).
+5. On success, call upload_status to confirm the sidecar exists.
+6. Report upload_id, blob_path, total_pages, status, gap_summary, and the next chunking action.
+
+Rules:
+- Phase U accepts PDF only. Do not attempt DOCX, TXT, Markdown, or SOP upload.
+- NEVER set version or year for user guide uploads; user guides have no version metadata.
+- A successful upload is NOT queryable yet. It only creates the PDF blob and sidecar.
+- Tell the operator to run Agent 19 or POST /banner/upload/chunk before testing retrieval.
+- If the operator gives an HTTP (not HTTPS) URL, explain why it's rejected and ask for HTTPS.
+- If the upload fails with a 400 about module, explain the known module list and ask them to clarify.
+"""
+```
+
+### Implementation
+
+```python
+def run_upload_tool(tool_name: str, tool_input: dict) -> str:
+    if tool_name == "banner_upload_file":
+        file_path = tool_input.pop("file_path")
+        with open(file_path, "rb") as f:
+            resp = requests.post(
+                f"{BASE_URL}/banner/upload",
+                files={"file": (os.path.basename(file_path), f)},
+                data=tool_input,  # source_type, module, version, year
+                headers={"Authorization": f"Bearer {API_KEY}"},
+            )
+        resp.raise_for_status()
+        return json.dumps(resp.json())
+    if tool_name == "banner_upload_from_url":
+        resp = requests.post(f"{BASE_URL}/banner/upload/from-url", json=tool_input, headers=HEADERS)
+        resp.raise_for_status()
+        return json.dumps(resp.json())
+    if tool_name == "upload_status":
+        return json.dumps(call_api("GET", f"/banner/upload/{tool_input['upload_id']}/status"))
+    if tool_name == "upload_list":
+        return json.dumps(call_api("GET", "/banner/upload"))
+    return json.dumps({"error": "unknown tool"})
+
+
+def upload_coordinator_agent(user_message: str) -> str:
+    messages = [{"role": "user", "content": user_message}]
+    while True:
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1024,
+            system=UPLOAD_COORDINATOR_SYSTEM,
+            tools=UPLOAD_TOOLS,
+            messages=messages,
+        )
+        if response.stop_reason == "end_turn":
+            return next(b.text for b in response.content if b.type == "text")
+        tool_results = []
+        for block in response.content:
+            if block.type == "tool_use":
+                result = run_upload_tool(block.name, dict(block.input))
+                tool_results.append({"type": "tool_result", "tool_use_id": block.id, "content": result})
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+```
+
+### Example Session
+
+```
+Operator: I need to add Banner Finance 9.3.22 release notes to the knowledge base.
+
+Agent:  Got it — Banner Finance release notes. A few quick questions:
+        1. Do you have a local file path, or a download URL from Ellucian?
+        2. What year are these from? (e.g. 2026)
+
+Operator: I have the file at /home/admin/Banner_Finance_9.3.22.pdf and it's from 2026.
+
+Agent:  [calls banner_upload_file with {
+            file_path: "/home/admin/Banner_Finance_9.3.22.pdf",
+            source_type: "banner", module: "Finance", version: "9.3.22", year: "2026"
+        }]
+        → {
+          "upload_id": "upload-123",
+          "blob_path": "banner/finance/releases/2026/Banner_Finance_9.3.22.pdf",
+          "total_pages": 42,
+          "status": "pending",
+          "chunking_pattern": "none",
+          "gap_count": 1,
+          "gap_summary": "1 gap: pages 1-42 (42 pages total unchunked)"
+        }
+        [calls upload_status with {"upload_id": "upload-123"}]
+
+Answer: Upload successful.
+        - Upload ID: upload-123
+        - Blob path: banner/finance/releases/2026/Banner_Finance_9.3.22.pdf
+        - Status: pending, 42 pages unchunked
+        - Next step: run Agent 19 or POST /banner/upload/chunk to make pages queryable.
+
+---
+
+Operator: Add the Banner Finance user guide from https://customercare.ellucian.com/downloads/finance-guide.pdf
+
+Agent:  [calls banner_upload_from_url with {
+            url: "https://customercare.ellucian.com/downloads/finance-guide.pdf",
+            source_type: "banner_user_guide", module: "Finance"
+        }]
+        (Note: no version or year — user guides are not versioned)
+        → {
+          "upload_id": "upload-456",
+          "blob_path": "banner/finance/use/finance-guide.pdf",
+          "total_pages": 260,
+          "status": "pending",
+          "gap_summary": "1 gap: pages 1-260 (260 pages total unchunked)"
+        }
+
+Answer: Finance user guide uploaded.
+        - Upload ID: upload-456
+        - Blob path: banner/finance/use/finance-guide.pdf
+        - Not queryable yet. Chunk all pages or choose a page range with Agent 19.
+```
+
+---
+
+## Agent 19: Upload Chunking Wizard Agent
+
+**Purpose:** Guide an operator through making an uploaded PDF queryable by chunking page ranges,
+checking sidecar status, and optionally verifying retrieval after chunking completes.
+
+**Use case:** Agent 18 uploaded a 260-page Finance user guide and returned `upload_id=upload-456`.
+Agent 19 helps the operator chunk pages 1-50 first, resume later, or chunk all remaining gaps.
+
+**Type:** Multi-turn guided workflow agent. 2-6 tool calls per session.
+
+**Requires:** Phase U chunk, status, list, and ask routes deployed.
+
+**Recommended model:** `claude-haiku-4-5` — guided workflow with structured tool calls.
+
+---
+
+### Tools
+
+```python
+CHUNKING_TOOLS = [
+    {
+        "name": "upload_status",
+        "description": "Read full sidecar status for an uploaded PDF.",
+        "input_schema": {
+            "type": "object",
+            "properties": {"upload_id": {"type": "string"}},
+            "required": ["upload_id"],
+        },
+    },
+    {
+        "name": "upload_list",
+        "description": "List tracked uploads and sidecar summaries.",
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "upload_chunk",
+        "description": (
+            "Chunk an uploaded PDF page range. Omit page_start/page_end to chunk all remaining gaps."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "upload_id": {"type": "string"},
+                "page_start": {"type": "integer"},
+                "page_end": {"type": "integer"},
+                "pages_per_batch": {"type": "integer", "default": 10},
+            },
+            "required": ["upload_id"],
+        },
+    },
+    {
+        "name": "module_ask",
+        "description": "Verify retrieval after chunking has completed for relevant pages.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string"},
+                "module": {"type": "string"},
+                "source_type": {"type": "string"},
+                "top_k": {"type": "integer", "default": 3},
+            },
+            "required": ["question", "module"],
+        },
+    },
+]
+```
+
+### System Prompt
+
+```python
+CHUNKING_WIZARD_SYSTEM = """You are a Banner ERP upload chunking wizard.
+Your job is to make an already-uploaded PDF queryable by calling POST /banner/upload/chunk.
+
+Workflow:
+1. Ask for upload_id if it was not provided. If the operator does not know it, call upload_list.
+2. Call upload_status and summarize status, total_pages, gap_summary, and chunking_pattern.
+3. Ask whether to chunk all remaining pages or a specific page range.
+4. Call upload_chunk. If page_start/page_end are omitted, all unchunked gaps are processed.
+5. Call upload_status again and report gap_count, queryable_page_count, remaining_page_count.
+6. If at least one page range is queryable, optionally run module_ask with a targeted verification query.
+
+Rules:
+- Do not call upload_chunk for overlapping or out-of-bounds ranges shown by status.
+- If a chunk call returns 409, explain that another chunk run is active for this upload_id.
+- If status remains partial, be explicit that only chunked pages are queryable.
+- Use gap_count and unchunked_ranges as the source of truth for remaining work.
+- DELETE /banner/upload/{id} does not purge Azure Search chunks; never claim it does.
+"""
+```
+
+### Implementation
+
+```python
+def run_chunking_tool(tool_name: str, tool_input: dict) -> str:
+    if tool_name == "upload_status":
+        return json.dumps(call_api("GET", f"/banner/upload/{tool_input['upload_id']}/status"))
+    if tool_name == "upload_list":
+        return json.dumps(call_api("GET", "/banner/upload"))
+    if tool_name == "upload_chunk":
+        return json.dumps(call_api("POST", "/banner/upload/chunk", tool_input))
+    if tool_name == "module_ask":
+        payload = {
+            "question": tool_input["question"],
+            "top_k": tool_input.get("top_k", 3),
+            "source_type": tool_input.get("source_type", ""),
+        }
+        module = tool_input["module"].lower().replace(" ", "-")
+        return json.dumps(call_api("POST", f"/banner/{module}/ask", payload))
+    return json.dumps({"error": "unknown tool"})
+```
+
+### Example Session
+
+```
+Operator: Chunk upload-456, but start with the first 50 pages.
+
+Agent:  [calls upload_status with {"upload_id": "upload-456"}]
+        → {total_pages: 260, status: "pending", gap_summary: "1 gap: pages 1-260"}
+        [calls upload_chunk with {"upload_id": "upload-456", "page_start": 1, "page_end": 50}]
+        → {pages_chunked: 50, chunks_indexed: 410, status: "partial", gap_count: 1}
+        [calls upload_status with {"upload_id": "upload-456"}]
+        → {queryable_page_count: 50, remaining_page_count: 210, gap_summary: "1 gap: pages 51-260"}
+
+Answer: Pages 1-50 are now queryable. The upload is still partial; pages 51-260 remain.
+        Continue with another page range or chunk all remaining pages when ready.
+```
+
+---
+
 ## Tool Reference: API-to-Tool Mapping
 
 | Tool Name | HTTP Method | Endpoint | Agent(s) Using It |
@@ -2157,7 +2720,8 @@ Re-run after Finance AR PDFs are ingested or after 50+ new feedback entries accu
 | `banner_ingest` | POST | `/banner/ingest` | 5 |
 | `sop_ingest` | POST | `/sop/ingest` | 5 |
 | `index_health` | GET | `/health` | 5, 7 |
-| `index_stats` | GET | `/index/stats` | 5, 7, 9 |
+| `index_stats` | GET | `/index/stats` | 5, 7, 9, 17 |
+| `debug_chunks` | GET | `/debug/chunks` | 17 |
 | `chat_ask` | POST | `/chat/ask` | 8 |
 | `chat_intent` | POST | `/chat/intent` | 8 |
 | `chat_sentiment` | POST | `/chat/sentiment` | 8 |
@@ -2170,6 +2734,13 @@ Re-run after Finance AR PDFs are ingested or after 50+ new feedback entries accu
 | `analytics_summary` | GET | `/analytics/summary` | 15, 16 |
 | `feedback_report` | GET | `/analytics/feedback` | 15, 16 |
 | `feedback_submit` | POST | `/chat/feedback` | 8 (extended) |
+| `ingest_dryrun` | POST | `/banner/ingest` (dry_run=true) | 17 |
+| `banner_upload_file` | POST | `/banner/upload` (multipart) | 18 |
+| `banner_upload_from_url` | POST | `/banner/upload/from-url` | 18 |
+| `upload_chunk` | POST | `/banner/upload/chunk` | 19 |
+| `upload_status` | GET | `/banner/upload/{upload_id}/status` | 18, 19 |
+| `upload_list` | GET | `/banner/upload` | 18, 19 |
+| `upload_delete` | DELETE | `/banner/upload/{upload_id}` | 19 |
 
 ---
 
@@ -2196,6 +2767,9 @@ agents/
 ├── grounding.py           # Agent 14
 ├── analytics.py           # Agent 15
 ├── feedback_analyst.py    # Agent 16
+├── preflight.py           # Agent 17
+├── upload_coordinator.py  # Agent 18
+├── upload_chunking.py     # Agent 19
 └── cli.py                 # Entry point: pick agent by command-line arg
 ```
 
@@ -2235,6 +2809,9 @@ def check_confidence(api_result: dict) -> str | None:
 | Answer Grounding (Agent 14) | `claude-haiku-4-5` | < $0.001 per check |
 | Analytics Advisor (Agent 15) | `claude-haiku-4-5` | < $0.005 per query |
 | Feedback Pattern Analyst (Agent 16) | `claude-sonnet-4-6` | < $0.02 per weekly report |
+| PDF Preflight Auditor (Agent 17) | `claude-haiku-4-5` | < $0.002 per audit run |
+| Document Upload Coordinator (Agent 18) | `claude-haiku-4-5` | < $0.003 per upload session |
+| Upload Chunking Wizard (Agent 19) | `claude-haiku-4-5` | < $0.003 per chunking session |
 
 Azure OpenAI costs (embedding + chat) remain the same regardless of which Claude model is used.
 
@@ -2289,6 +2866,18 @@ tool dispatch loop and prompt logic without incurring API costs.
     First signal that the index needs new documents or a prompt needs adjustment.
 14. **Agent 16 — Feedback Analyst**: Run after 50+ feedback entries accumulate. Generates
     a prioritized remediation list distinguishing retrieval gaps from prompt quality issues.
+
+**Ingest operations (run before any new document collection is added):**
+
+15. **Agent 17 — PDF Preflight Auditor**: Run before every ingest of new PDFs. Catches naming
+    convention errors, detects scanned PDFs, and estimates time — before a single embedding
+    call is made. Requires Phase L.2 (dry-run endpoint) to be deployed.
+16. **Agent 18 — Document Upload Coordinator**: The conversational path to upload a PDF without
+    SSH or filesystem access. It handles module/source_type inference and returns an `upload_id`.
+    Requires Phase U upload routes.
+17. **Agent 19 — Upload Chunking Wizard**: Makes uploaded PDFs queryable by chunking all remaining
+    pages or selected page ranges, then verifies status and retrieval. Requires Phase U chunk/status
+    routes.
 
 ---
 

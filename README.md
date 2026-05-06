@@ -102,6 +102,12 @@ Estimated cost for dev/demo: ~$1–5/month. Use 10K TPM limits on both deploymen
 | POST | `/banner/ingest` | Ingest PDFs from `data/docs/banner` |
 | GET | `/banner/blob/list` | List PDFs in Azure Blob |
 | POST | `/banner/blob/sync` | Download from Blob and ingest |
+| POST | `/banner/upload` | Upload a Banner PDF to Blob and create sidecar state; does not index |
+| POST | `/banner/upload/from-url` | Download an allowlisted HTTPS PDF to Blob and create sidecar state; does not index |
+| POST | `/banner/upload/chunk` | Index all remaining pages, or one non-overlapping page range, for an uploaded PDF |
+| GET | `/banner/upload/{upload_id}/status` | Read upload sidecar status, chunked ranges, gaps, and queryable page count |
+| GET | `/banner/upload` | List tracked uploads and their chunking status |
+| DELETE | `/banner/upload/{upload_id}` | Delete uploaded PDF and sidecar; index purge is not implemented |
 | POST | `/banner/summarize/full` | Structured summary: changes, breaking, actions, compatibility |
 
 Key request fields for `/banner/ask`: `question` (required), `module_filter`, `version_filter`, `year_filter`, `top_k`, `mode` (`local`/`web`/`hybrid`/`auto`).
@@ -189,6 +195,11 @@ data/docs/
 
 Supported: `.pdf`, `.txt`, `.md`, `.docx`. SOPs must follow the `SOP<N> - <Title>.docx` naming convention.
 
+For cloud deployments without filesystem access, use the upload workflow instead:
+`POST /banner/upload` or `POST /banner/upload/from-url`, then `POST /banner/upload/chunk`.
+Phase U upload accepts PDF files only; DOCX, TXT, Markdown, and SOP upload are rejected.
+See [ingest/PDF_UPLOAD_FLOW.md](ingest/PDF_UPLOAD_FLOW.md).
+
 ---
 
 ## gRPC
@@ -220,6 +231,7 @@ AZURE_SEARCH_INDEX_NAME=citesearch-knowledge
 
 AZURE_STORAGE_CONNECTION_STRING=   # optional
 AZURE_STORAGE_CONTAINER_NAME=banner-release-notes
+AZURE_STORAGE_BLOB_PREFIX=
 
 TAVILY_API_KEY=                    # optional, enables mode=web/hybrid/auto
 CONFIDENCE_HIGH_THRESHOLD=0.030
@@ -230,26 +242,73 @@ CHUNK_OVERLAP=25
 TOP_K_DEFAULT=5
 API_PORT=8000
 GRPC_PORT=9000
+MAX_UPLOAD_SIZE_MB=100
+UPLOAD_URL_ALLOWLIST=customercare.ellucian.com,ellucian.com
 ```
 
 ---
 
-## Wiki
+## Documentation map
+
+### Root documents
+
+| Guide | What it covers |
+|---|---|
+| [README.md](README.md) | Project overview, quick start, API summary, and documentation map |
+| [CLAUDE.md](CLAUDE.md) | AI assistant operating context and routing rules |
+| [PLAN.md](PLAN.md) | Archived implementation plan, phases, acceptance criteria, and follow-up work |
+
+### Start here
 
 | Guide | What it covers |
 |---|---|
 | [RUNBOOK.md](wiki/RUNBOOK.md) | **Start here** — end-to-end setup for all run paths |
+| [HOW-TO.md](wiki/HOW-TO.md) | Task recipes for running, ingesting, uploading, querying, and regenerating docs |
 | [LOCAL-DEV.md](wiki/LOCAL-DEV.md) | Dev session startup, env vars, common commands |
+| [DEVELOPER-GUIDE.md](wiki/DEVELOPER-GUIDE.md) | Repo map, code boundaries, endpoint workflow, and definition of done |
+
+### Operations and quality
+
+| Guide | What it covers |
+|---|---|
+| [TESTING.md](wiki/TESTING.md) | Test commands, test categories, live-test rules, and pre-handoff checklist |
+| [TROUBLESHOOTING.md](wiki/TROUBLESHOOTING.md) | Symptoms -> root cause -> fix |
+| [OBSERVABILITY.md](wiki/OBSERVABILITY.md) | Logging, metrics, tracing, alerting, and resilience |
+| [NICE-TO-KNOW.md](wiki/NICE-TO-KNOW.md) | Practical context about scores, upload state, deletion, ngrok, and cost |
+
+### Runtime and deployment
+
+| Guide | What it covers |
+|---|---|
 | [DOCKER-DEV.md](wiki/DOCKER-DEV.md) | Full Docker Compose stack (backend + adapter + ngrok) |
-| [BOTPRESS-SETUP.md](wiki/BOTPRESS-SETUP.md) | Botpress wiring, Execute Code snippets, testing options |
+| [DOCKER_ACA.md](wiki/DOCKER_ACA.md) | Docker and Azure Container Apps deployment planning |
 | [FLY-NGROK.md](wiki/FLY-NGROK.md) | Fly.io deploy, ngrok tunnel, secrets |
+| [AZURE_FUNCTIONS.md](wiki/AZURE_FUNCTIONS.md) | Azure Functions integration options and trigger patterns |
+
+### Chatbot and agents
+
+| Guide | What it covers |
+|---|---|
 | [CHATBOT.md](wiki/CHATBOT.md) | Architecture, API surface, response shapes, user guide routing |
-| [INTERNALS.md](wiki/INTERNALS.md) | Design decisions, data flow, chunking strategy |
-| [TROUBLESHOOTING.md](wiki/TROUBLESHOOTING.md) | Symptoms → root cause → fix |
-| [INTEGRATIONS.md](wiki/INTEGRATIONS.md) | LangGraph, n8n, MCP integration ideas |
-| [OBSERVABILITY.md](wiki/OBSERVABILITY.md) | Logging, metrics, tracing |
-| [UPGRADES.md](wiki/UPGRADES.md) | API hardening, RAG quality, streaming, roadmap |
+| [BOTPRESS-SETUP.md](wiki/BOTPRESS-SETUP.md) | Botpress wiring, Execute Code snippets, testing options |
+| [BANNER_WIZARD.md](wiki/BANNER_WIZARD.md) | Guided Banner Student workflow chatbot design |
 | [CLAUDE_AGENTS.md](wiki/CLAUDE_AGENTS.md) | Claude agent designs over this backend |
+
+### Data and architecture
+
+| Guide | What it covers |
+|---|---|
+| [INGEST.md](wiki/INGEST.md) | Ingest pipeline operator reference |
+| [INTERNALS.md](wiki/INTERNALS.md) | Design decisions, data flow, chunking strategy |
+| [DATABASE.md](wiki/DATABASE.md) | AI-ready SQL and database evolution options |
+
+### Roadmap and integrations
+
+| Guide | What it covers |
+|---|---|
+| [INTEGRATIONS.md](wiki/INTEGRATIONS.md) | LangGraph, n8n, MCP integration ideas |
+| [AI-ROADMAP.md](wiki/AI-ROADMAP.md) | AI provider modernization and feature roadmap |
+| [UPGRADES.md](wiki/UPGRADES.md) | API hardening, RAG quality, streaming, roadmap |
 
 ---
 

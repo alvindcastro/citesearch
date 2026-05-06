@@ -54,7 +54,7 @@
 ## Phase 2 — Provider-Agnostic AI Layer
 **Goal:** Replace the Azure OpenAI hard-dependency with a pluggable `AiProvider` interface. Switch models or vendors via config, not code changes. Avoid vendor lock-in at the architecture level.
 
-> Detailed phase breakdown with TDD task lists for `AITestGenerator` specifically: [docs/ai/AI-GENERATOR-ROADMAP.md](ai/AI-GENERATOR-ROADMAP.md)
+> Detailed phase breakdown with TDD task lists for `AITestGenerator` specifically can live in `docs/ai/AI-GENERATOR-ROADMAP.md` when that roadmap is added.
 
 ### The Core Problem With the Current Approach
 

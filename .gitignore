@@ -33,3 +33,10 @@ docs/
 
 # Claude Code memory (local to this machine)
 memory/
+
+# Local tooling and ephemeral caches
+.tooling/
+.tmp/
+
+# Local Codex plugin installs
+plugins/

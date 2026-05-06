@@ -167,6 +167,9 @@ All tests use `httptest` mocks — no live backend needed.
 
 > **Note on -race:** CGO_ENABLED=1 required on Windows. If the race detector isn't available in your shell, drop `-race` for a quick check and add it back in CI.
 
+For package-specific commands, upload workflow tests, live-test guidance, and the pre-handoff
+checklist, see [TESTING.md](TESTING.md).
+
 ---
 
 ## Opening the demo page

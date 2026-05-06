@@ -1,0 +1,25 @@
+info:
+  name: Upload From URL
+  type: http
+  seq: 11
+
+http:
+  method: POST
+  url: "{{base_url}}/banner/upload/from-url"
+  body:
+    type: json
+    data: |-
+      {
+        "url": "https://customercare.ellucian.com/downloads/Banner_Finance_9.3.22_Release_Notes.pdf",
+        "source_type": "banner",
+        "module": "Finance",
+        "version": "9.3.22",
+        "year": "2026"
+      }
+  auth: inherit
+
+settings:
+  encodeUrl: true
+  timeout: 0
+  followRedirects: true
+  maxRedirects: 5
