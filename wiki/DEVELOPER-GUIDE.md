@@ -1,6 +1,7 @@
 # Developer Guide
 
-Engineering notes for changing citesearch safely.
+Engineering guide for changing citesearch without breaking local workflows, upload state, or
+RAG behavior.
 
 ---
 
@@ -8,20 +9,20 @@ Engineering notes for changing citesearch safely.
 
 | Path | Responsibility |
 |---|---|
-| `cmd/main.go` | HTTP backend entry point on `API_PORT` (`8000` by default). |
-| `cmd/server/main.go` | Botpress adapter entry point on `PORT` (`8080` by default). |
-| `cmd/grpc/main.go` | gRPC server entry point on `GRPC_PORT` (`9000` by default). |
+| `cmd/main.go` | HTTP backend entry point. Uses `API_PORT` (`8000` by default). |
+| `cmd/server/main.go` | Botpress adapter entry point. Uses `PORT` (`8080` by default). |
+| `cmd/grpc/main.go` | gRPC server entry point. Uses `GRPC_PORT` (`9000` by default). |
 | `api/` | Chatbot adapter HTTP handlers: `/chat/ask`, `/chat/intent`, `/chat/sentiment`. |
 | `internal/api/` | Main backend Gin handlers and router wiring. |
 | `internal/rag/` | Query orchestration: embed, search, prompt, answer, confidence. |
 | `internal/ingest/` | File walking, text extraction, chunking, embeddings, Search upload. |
 | `internal/upload/` | Phase U upload/chunk sidecar services and test seams. |
-| `internal/azure/` | Azure OpenAI, Azure AI Search, and Blob integrations. |
+| `internal/azure/` | Azure OpenAI, Azure AI Search, and Azure Blob integrations. |
 | `internal/adapter/` | Adapter client that calls the backend from the Botpress-facing app. |
 | `internal/intent/` | Rule-based chatbot intent classifier. |
 | `internal/sentiment/` | Rule-based frustration/sentiment analyzer. |
 | `proto/` | gRPC service definitions. |
-| `gen/` | Generated gRPC Go code, gitignored. |
+| `gen/` | Generated gRPC Go code. Gitignored. |
 
 ---
 
@@ -37,7 +38,19 @@ Engineering notes for changing citesearch safely.
 
 ---
 
-## Adding A Backend Endpoint
+## Change Workflow
+
+Use the narrowest loop that proves the change:
+
+1. Start with the package that owns the behavior.
+2. Add or update focused tests before touching adjacent layers.
+3. Wire handlers/routes only after the owning package behavior is stable.
+4. Update docs when an operator-visible workflow, response, env var, or error changes.
+5. Run broader tests before handoff when the change crosses package boundaries.
+
+---
+
+## Adding a Backend Endpoint
 
 1. Add or update tests in `internal/api`.
 2. Add request/response structs in the owning package when behavior is domain-specific.
@@ -51,7 +64,8 @@ go test ./internal/api/... -v
 go generate ./internal/api/
 ```
 
-7. Update README or wiki docs when endpoint shape, env vars, operator workflow, or error behavior changes.
+7. Update README or wiki docs when endpoint shape, env vars, operator workflow, or error
+   behavior changes.
 
 ---
 
@@ -59,9 +73,9 @@ go generate ./internal/api/
 
 Upload behavior is intentionally split:
 
-- Upload routes store a PDF in Blob Storage and create a sidecar.
-- Upload routes do not call `ingest.Run()`, Azure OpenAI, or Azure AI Search.
-- `POST /banner/upload/chunk` is the only upload-flow endpoint that indexes uploaded pages.
+- Upload routes store a PDF in Azure Blob Storage and create a sidecar.
+- Upload routes must not call `ingest.Run()`, Azure OpenAI, or Azure AI Search.
+- `POST /banner/upload/chunk` is the upload-flow endpoint that indexes uploaded pages.
 
 When changing upload behavior:
 
@@ -81,7 +95,7 @@ go test ./internal/api/... -run UploadWorkflow -v
 
 ---
 
-## Adding RAG Or Ingest Behavior
+## Adding RAG or Ingest Behavior
 
 RAG and ingest changes have a higher blast radius because they affect answer quality and Azure cost.
 
@@ -105,7 +119,7 @@ go test ./internal/azure/... -v
 
 ## Adding Adapter Behavior
 
-The adapter is intentionally thin. It should classify, route, and normalize responses, not run RAG
+The adapter is intentionally thin. It classifies, routes, and normalizes responses; it does not run RAG
 logic itself.
 
 Checklist:
@@ -140,6 +154,7 @@ Required for Phase U upload:
 Required for URL upload:
 
 - `UPLOAD_URL_ALLOWLIST` when using hosts outside the default allowlist.
+- `MAX_UPLOAD_SIZE_MB` when the default upload limit is too small for expected PDFs.
 
 Required for the adapter:
 
@@ -149,7 +164,7 @@ Never commit `.env`, Azure keys, Fly secrets, Botpress tokens, or ngrok tokens.
 
 ---
 
-## Definition Of Done
+## Definition of Done
 
 Before handing off a code change:
 
@@ -159,4 +174,3 @@ Before handing off a code change:
 - Docs are updated for endpoint, env var, response, workflow, or troubleshooting changes.
 - `git diff --check` is clean for files you touched.
 - Unrelated dirty files are left untouched.
-

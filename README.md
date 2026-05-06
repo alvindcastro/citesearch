@@ -248,26 +248,67 @@ UPLOAD_URL_ALLOWLIST=customercare.ellucian.com,ellucian.com
 
 ---
 
-## Wiki
+## Documentation map
+
+### Root documents
+
+| Guide | What it covers |
+|---|---|
+| [README.md](README.md) | Project overview, quick start, API summary, and documentation map |
+| [CLAUDE.md](CLAUDE.md) | AI assistant operating context and routing rules |
+| [PLAN.md](PLAN.md) | Archived implementation plan, phases, acceptance criteria, and follow-up work |
+
+### Start here
 
 | Guide | What it covers |
 |---|---|
 | [RUNBOOK.md](wiki/RUNBOOK.md) | **Start here** — end-to-end setup for all run paths |
 | [HOW-TO.md](wiki/HOW-TO.md) | Task recipes for running, ingesting, uploading, querying, and regenerating docs |
-| [DEVELOPER-GUIDE.md](wiki/DEVELOPER-GUIDE.md) | Repo map, code boundaries, endpoint workflow, and definition of done |
-| [TESTING.md](wiki/TESTING.md) | Test commands, test categories, live-test rules, and pre-handoff checklist |
 | [LOCAL-DEV.md](wiki/LOCAL-DEV.md) | Dev session startup, env vars, common commands |
-| [DOCKER-DEV.md](wiki/DOCKER-DEV.md) | Full Docker Compose stack (backend + adapter + ngrok) |
-| [BOTPRESS-SETUP.md](wiki/BOTPRESS-SETUP.md) | Botpress wiring, Execute Code snippets, testing options |
-| [FLY-NGROK.md](wiki/FLY-NGROK.md) | Fly.io deploy, ngrok tunnel, secrets |
-| [CHATBOT.md](wiki/CHATBOT.md) | Architecture, API surface, response shapes, user guide routing |
-| [INTERNALS.md](wiki/INTERNALS.md) | Design decisions, data flow, chunking strategy |
-| [TROUBLESHOOTING.md](wiki/TROUBLESHOOTING.md) | Symptoms → root cause → fix |
+| [DEVELOPER-GUIDE.md](wiki/DEVELOPER-GUIDE.md) | Repo map, code boundaries, endpoint workflow, and definition of done |
+
+### Operations and quality
+
+| Guide | What it covers |
+|---|---|
+| [TESTING.md](wiki/TESTING.md) | Test commands, test categories, live-test rules, and pre-handoff checklist |
+| [TROUBLESHOOTING.md](wiki/TROUBLESHOOTING.md) | Symptoms -> root cause -> fix |
+| [OBSERVABILITY.md](wiki/OBSERVABILITY.md) | Logging, metrics, tracing, alerting, and resilience |
 | [NICE-TO-KNOW.md](wiki/NICE-TO-KNOW.md) | Practical context about scores, upload state, deletion, ngrok, and cost |
-| [INTEGRATIONS.md](wiki/INTEGRATIONS.md) | LangGraph, n8n, MCP integration ideas |
-| [OBSERVABILITY.md](wiki/OBSERVABILITY.md) | Logging, metrics, tracing |
-| [UPGRADES.md](wiki/UPGRADES.md) | API hardening, RAG quality, streaming, roadmap |
+
+### Runtime and deployment
+
+| Guide | What it covers |
+|---|---|
+| [DOCKER-DEV.md](wiki/DOCKER-DEV.md) | Full Docker Compose stack (backend + adapter + ngrok) |
+| [DOCKER_ACA.md](wiki/DOCKER_ACA.md) | Docker and Azure Container Apps deployment planning |
+| [FLY-NGROK.md](wiki/FLY-NGROK.md) | Fly.io deploy, ngrok tunnel, secrets |
+| [AZURE_FUNCTIONS.md](wiki/AZURE_FUNCTIONS.md) | Azure Functions integration options and trigger patterns |
+
+### Chatbot and agents
+
+| Guide | What it covers |
+|---|---|
+| [CHATBOT.md](wiki/CHATBOT.md) | Architecture, API surface, response shapes, user guide routing |
+| [BOTPRESS-SETUP.md](wiki/BOTPRESS-SETUP.md) | Botpress wiring, Execute Code snippets, testing options |
+| [BANNER_WIZARD.md](wiki/BANNER_WIZARD.md) | Guided Banner Student workflow chatbot design |
 | [CLAUDE_AGENTS.md](wiki/CLAUDE_AGENTS.md) | Claude agent designs over this backend |
+
+### Data and architecture
+
+| Guide | What it covers |
+|---|---|
+| [INGEST.md](wiki/INGEST.md) | Ingest pipeline operator reference |
+| [INTERNALS.md](wiki/INTERNALS.md) | Design decisions, data flow, chunking strategy |
+| [DATABASE.md](wiki/DATABASE.md) | AI-ready SQL and database evolution options |
+
+### Roadmap and integrations
+
+| Guide | What it covers |
+|---|---|
+| [INTEGRATIONS.md](wiki/INTEGRATIONS.md) | LangGraph, n8n, MCP integration ideas |
+| [AI-ROADMAP.md](wiki/AI-ROADMAP.md) | AI provider modernization and feature roadmap |
+| [UPGRADES.md](wiki/UPGRADES.md) | API hardening, RAG quality, streaming, roadmap |
 
 ---
 

@@ -2,9 +2,23 @@
 
 Task-focused recipes for running, ingesting, querying, and validating citesearch.
 
+Use this guide when you already know what task you need to perform. For end-to-end setup paths,
+start with [RUNBOOK.md](RUNBOOK.md).
+
 ---
 
-## Start The Backend Locally
+## Before You Start
+
+Most recipes assume:
+
+- You are running commands from the repository root.
+- `.env` exists and contains Azure OpenAI and Azure AI Search values.
+- `jq` is available for formatting JSON responses.
+- The backend listens on `http://localhost:8000` unless a command says otherwise.
+
+---
+
+## Start the Backend Locally
 
 ```bash
 cp .env.example .env
@@ -25,7 +39,7 @@ and search index.
 
 ---
 
-## Create Or Recreate The Search Index
+## Create or Recreate the Search Index
 
 ```bash
 curl -s -X POST http://localhost:8000/index/create | jq .
@@ -33,8 +47,7 @@ curl -s http://localhost:8000/index/stats | jq .
 ```
 
 Use this after changing index schema or when starting from an empty Azure AI Search resource.
-If the index already exists, check whether your local code expects a different schema before
-reusing it.
+If the index already exists, confirm that your local code expects the same schema before reusing it.
 
 ---
 
@@ -69,7 +82,7 @@ curl -s http://localhost:8000/debug/chunks | jq '.[0:3]'
 
 ---
 
-## Upload A PDF Without Filesystem Access
+## Upload a PDF Without Filesystem Access
 
 Use this path for Fly.io, Docker, or cloud deployments where you cannot place files under
 `data/docs/`.
@@ -102,7 +115,7 @@ See [../ingest/PDF_UPLOAD_FLOW.md](../ingest/PDF_UPLOAD_FLOW.md).
 
 ---
 
-## Upload A PDF From An Allowlisted URL
+## Upload a PDF From an Allowlisted URL
 
 Set `UPLOAD_URL_ALLOWLIST` in `.env` if the host is not already allowed:
 
@@ -128,7 +141,7 @@ Follow with `POST /banner/upload/chunk` when you are ready to index.
 
 ---
 
-## Ask A Question Directly Against The Backend
+## Ask a Question Directly Against the Backend
 
 ```bash
 curl -s -X POST http://localhost:8000/banner/ask \
@@ -154,7 +167,9 @@ curl -s -X POST http://localhost:8000/sop/ask \
 
 ---
 
-## Run The Chatbot Adapter Locally
+## Run the Chatbot Adapter Locally
+
+Start the backend first, then run the adapter in a second shell:
 
 ```bash
 RAG_BACKEND_URL=http://localhost:8000 PORT=8080 go run cmd/server/main.go
@@ -174,6 +189,8 @@ curl -s -X POST http://localhost:8080/chat/ask \
 
 ## Regenerate Swagger Docs
 
+Run this after changing public handler annotations or response models:
+
 ```bash
 go generate ./internal/api/
 ```
@@ -187,6 +204,8 @@ http://localhost:8000/docs/index.html
 ---
 
 ## Regenerate gRPC Code
+
+Run this after changing `proto/` definitions:
 
 ```bash
 buf generate
@@ -212,4 +231,3 @@ base_url=http://localhost:8000
 
 Use the System folder for health/index checks, then Banner or SOP folders for ingest and ask
 flows.
-

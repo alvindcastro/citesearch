@@ -27,11 +27,29 @@ go test ./internal/api/... -run UploadWorkflow -v -count=1
 
 ---
 
+## Which Tests Should I Run?
+
+| Change type | Minimum local check |
+|---|---|
+| Docs only | `git diff --check -- <changed-files>` |
+| Upload metadata, ranges, or sidecars | `go test ./internal/upload/... -v` |
+| Upload HTTP route | `go test ./internal/api/... -run 'Upload|Chunk' -v` |
+| End-to-end upload workflow | `go test ./internal/api/... -run UploadWorkflow -v` |
+| Ingest parsing or chunking | `go test ./internal/ingest/... -v` |
+| RAG retrieval, confidence, or prompt flow | `go test ./internal/rag/... -v` |
+| Adapter routing or response normalization | `go test ./api/... ./internal/adapter/... ./internal/intent/... -v` |
+| gRPC API | `go test ./internal/grpcserver/... ./cmd/grpc/... -v` |
+
+Run `go test ./... -v` before handoff when the change crosses package boundaries or touches
+shared behavior.
+
+---
+
 ## Test Categories
 
 ### Unit Tests
 
-Most tests are pure or use fakes. They should not require live Azure credentials.
+Most tests are pure or use fakes. They must not require live Azure credentials.
 
 Examples:
 
@@ -60,7 +78,7 @@ Examples:
 ### Offline Workflow Tests
 
 `internal/api/upload_workflow_test.go` covers full upload route workflows with fake dependencies.
-It proves operator flows without live Azure, public network access, OpenAI, or Azure Search.
+It proves operator flows without live Azure, public network access, Azure OpenAI, or Azure Search.
 
 ```bash
 go test ./internal/api/... -run UploadWorkflow -v
@@ -75,7 +93,7 @@ Covered flows:
 
 ### Live Integration Tests
 
-There are no default live Azure integration tests. If you add any, make them opt-in:
+There are no default live Azure integration tests. If you add one, make it opt-in:
 
 - Use separate `.env.test` or explicit env vars.
 - Skip when credentials are not present.
@@ -92,7 +110,7 @@ if os.Getenv("CITESEARCH_LIVE_AZURE") != "1" {
 
 ---
 
-## Recommended Workflow For Changes
+## Recommended Workflow for Changes
 
 1. Run the package test that covers the change.
 2. Run adjacent package tests if the change crosses a boundary.
@@ -118,14 +136,15 @@ go test ./internal/ingest/... -v
 
 ## Race Detector Notes
 
-Use the race detector when changing shared state, locks, handler globals, or background work:
+Use the race detector when changing shared state, locks, handler globals, goroutines, or background
+work:
 
 ```bash
 go test ./... -v -race
 ```
 
 On Windows, the race detector requires `CGO_ENABLED=1`. If your shell cannot run it, run the
-functional suite without `-race` and rely on Linux CI or a Linux shell for race coverage.
+functional suite without `-race` and call out that race coverage was not run locally.
 
 ---
 
@@ -150,6 +169,7 @@ This repo values focused behavioral tests over raw coverage percentage. Add broa
 | Handler tests hit localhost | Test bypassed fake client | Use `httptest.NewServer` or injected fake dependencies. |
 | Upload workflow tests fail after response change | JSON shape changed | Update tests and docs together. |
 | Azure tests fail in ordinary suite | Live dependency leaked into unit test | Add interface seam, fake dependency, or opt-in skip. |
+| `go test ./...` is slow | Broad suite is doing too much for the current edit | Run the owning package first, then broaden before handoff. |
 
 ---
 
@@ -161,4 +181,3 @@ This repo values focused behavioral tests over raw coverage percentage. Add broa
 - New upload workflows have offline workflow coverage.
 - New env vars are documented in README or the relevant wiki page.
 - New failure modes are documented in [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
-
