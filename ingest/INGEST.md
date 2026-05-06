@@ -509,8 +509,8 @@ in stages across any page ranges.
 | Upload — multipart (Phase U.5) | `POST /banner/upload` | Ad-hoc file upload to Blob. Creates sidecar. Does not chunk. |
 | Upload — from URL (Phase U.6) | `POST /banner/upload/from-url` | Ellucian ECC links, automation. Downloads to Blob. Creates sidecar. Does not chunk. |
 | Chunk (Phase U.7) | `POST /banner/upload/chunk` | Chunk a page range of any uploaded PDF. Can be called multiple times with non-overlapping ranges in any order. |
-| Status (Phase U.8) | `GET /banner/upload/{id}/status` | Read sidecar: chunked ranges, unchunked ranges, chunking_pattern, gap_summary. |
-| List (Phase U.8) | `GET /banner/upload` | List all tracked uploads with chunking status and gap summaries. |
+| Status (Phase U.9) | `GET /banner/upload/{id}/status` | Read sidecar: chunked ranges, unchunked ranges, chunking_pattern, gap_summary. |
+| List (Phase U.9) | `GET /banner/upload` | List all tracked uploads with chunking status and gap summaries. |
 | Delete (Phase U.10) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
 
 ---

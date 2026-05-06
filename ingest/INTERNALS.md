@@ -165,9 +165,10 @@ POST /banner/upload/from-url → internal/api/handlers.go → BannerUploadFromUR
                               internal/upload/service.go → CreateUploadFromURL()
                               Downloads PDF from allowlisted HTTPS URL, then same as CreateUploadFromFile().
 
-POST /banner/upload/chunk   → internal/upload/handler.go → ChunkPages()
+POST /banner/upload/chunk   → internal/api/handlers.go → BannerUploadChunk()
+                              internal/upload/chunk.go → ChunkUpload()
                               Reads sidecar, downloads PDF from Blob for the requested page range,
-                              calls ingest.Run(blobPath, overwrite=false, startPage, endPage),
+                              calls ingest.Run() via the injected upload.IngestRunner,
                               appends to sidecar chunked_ranges, recomputes unchunked_ranges.
                               Iterates all unchunked_ranges when no page range specified.
 
@@ -826,24 +827,31 @@ No changes to the ingest pipeline are required.
 - `internal/ingest/docx_test.go` — DOCX paragraph extraction (unit)
 - `internal/ingest/sop_chunker_test.go` — SOP section chunking (unit)
 - `internal/ingest/sop_test.go` — SOP filename parsing (unit)
+- `internal/api/upload_workflow_test.go` — offline upload route workflows using fake Blob,
+  fake ingest, fake clock, fake UUID, fake page counter, and fake URL downloader
 
 **What's not tested (and why it's hard):**
 - Azure clients — require live Azure credentials; no mock layer exists
 - RAG pipeline — depends on Azure OpenAI + Azure Search; would need dependency injection to mock
-- HTTP handlers — could be unit tested with `httptest.NewRecorder()` but would need Azure mocks
 - End-to-end ingestion — requires a real file system + Azure Search index
 
 **Phase U upload/chunk — additional gaps:**
 - `internal/upload/range_math.go` and `internal/upload/service.go` cover the pure sidecar math and
   sidecar persistence helpers. They are unit tested with fake Blob storage.
-- `internal/upload/handler.go` — `UploadPDF()` and `ChunkPages()` require both Blob Storage and
-  the ingest pipeline. Unit test with a mock `BlobClient` interface and a stubbed `ingest.Run()`.
+- `internal/api/upload_*_test.go` covers upload/chunk/status/list/delete handler behavior with
+  injected fakes and no Azure credentials.
 - Sidecar atomic write — test that a simulated failure mid-gap leaves the sidecar in a valid state
   (completed gaps recorded, failed gap absent, `unchunked_ranges` correct).
 - Overlap detection edge cases — exact adjacency (`end=50`, `start=51` should pass), exact duplicate
   range, single-page range overlapping a multi-page range.
 
-**If you want to add integration tests:**
+**Offline route integration tests:**
+- `go test ./internal/api/... -run UploadWorkflow -v`
+- Covers multipart upload → status → chunk → status → list → delete.
+- Covers URL upload → status → chunk all remaining.
+- Covers sparse partial chunking and verifies upload/status/list do not index before chunk.
+
+**If you want to add live integration tests:**
 - Use a separate `.env.test` pointing at a test Azure Search index
 - Add a `TestMain()` that checks for test env vars and skips if not present
 - Test ingestion → query round trips against real data

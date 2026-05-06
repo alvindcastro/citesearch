@@ -4,8 +4,8 @@ Upload a PDF to Azure Blob Storage first, then chunk it into the search index in
 stages. Chunking and uploading are separate steps with explicit state tracked between them.
 
 See [INGEST_FLOW.md](INGEST_FLOW.md) for the end-to-end narrative. See [INGEST.md](INGEST.md)
-for the underlying ingest pipeline. Agent 19, the conversational wizard for this flow, still
-needs to be added to [../wiki/CLAUDE_AGENTS.md](../wiki/CLAUDE_AGENTS.md).
+for the underlying ingest pipeline. Agent 18 and Agent 19 guidance for conversational upload
+and chunking lives in [../wiki/CLAUDE_AGENTS.md](../wiki/CLAUDE_AGENTS.md).
 
 ---
 
@@ -24,6 +24,7 @@ needs to be added to [../wiki/CLAUDE_AGENTS.md](../wiki/CLAUDE_AGENTS.md).
 11. [Queryability During Partial Ingest](#queryability-during-partial-ingest)
 12. [Pre-Upload Checklist](#pre-upload-checklist)
 13. [Error Reference](#error-reference)
+14. [Offline Workflow Tests](#offline-workflow-tests)
 
 ---
 
@@ -703,3 +704,23 @@ Azure Search has no concept of a complete document — each chunk is independent
 | 409 chunk in progress | Another chunk call running for this `upload_id` | Wait for it to complete |
 | 413 file too large | Exceeds `MAX_UPLOAD_SIZE_MB` | Split the PDF or raise the limit |
 | 502 remote server error | `from-url` received 5xx from remote | Retry later or use multipart upload |
+
+---
+
+## Offline Workflow Tests
+
+The upload route workflows are covered by deterministic `httptest` coverage with fake Blob
+storage, fake page counting, fake URL download, fake UUIDs, fake clocks, and a fake ingest
+runner. These tests do not call live Azure, public network, OpenAI, or Azure Search services.
+
+```bash
+go test ./internal/api/... -run UploadWorkflow -v
+go test ./internal/upload/... -v
+```
+
+Covered workflows:
+
+- Multipart upload -> status -> chunk -> status -> list -> delete.
+- URL upload -> status -> chunk all remaining pages.
+- Sparse partial chunking with gap explanations.
+- Upload, status, and list paths do not index before `POST /banner/upload/chunk`.

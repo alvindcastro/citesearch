@@ -534,10 +534,10 @@ Acceptance criteria:
 
 ## Phase U.12 - Integration Test Harness
 
-- [ ] Add integration-style tests with fake Blob, fake ingest, fake clock, and fake UUID.
-- [ ] Cover multipart upload -> status -> chunk -> status -> list -> delete.
-- [ ] Cover URL upload -> status -> chunk all remaining.
-- [ ] Keep tests offline and deterministic.
+- [x] Add integration-style tests with fake Blob, fake ingest, fake clock, and fake UUID.
+- [x] Cover multipart upload -> status -> chunk -> status -> list -> delete.
+- [x] Cover URL upload -> status -> chunk all remaining.
+- [x] Keep tests offline and deterministic.
 
 Prompt for implementer:
 
@@ -549,26 +549,27 @@ public network access, or real OpenAI/Search calls.
 
 Red tests:
 
-- [ ] `TestUploadWorkflow_MultipartStatusChunkListDelete`
-- [ ] `TestUploadWorkflow_FromURLStatusChunkAllRemaining`
-- [ ] `TestUploadWorkflow_PartialSparseStatusExplainsGaps`
-- [ ] `TestUploadWorkflow_UploadNeverIndexesBeforeChunk`
+- [x] `TestUploadWorkflow_MultipartStatusChunkListDelete`
+- [x] `TestUploadWorkflow_FromURLStatusChunkAllRemaining`
+- [x] `TestUploadWorkflow_PartialSparseStatusExplainsGaps`
+- [x] `TestUploadWorkflow_UploadNeverIndexesBeforeChunk`
 
 Green tasks:
 
-- [ ] Add route-level test harness for injected upload dependencies.
-- [ ] Reuse fake clients from unit tests.
-- [ ] Assert JSON response shapes with stable fixtures.
+- [x] Add route-level test harness for injected upload dependencies.
+- [x] Reuse fake clients from unit tests.
+- [x] Assert JSON response shapes with stable fixtures.
 
 Refactor tasks:
 
-- [ ] Remove duplicate fake setup from individual handler tests if the harness makes it clearer.
+- [x] Keep existing focused handler-test fakes in place; the workflow harness reuses them without
+      broadening test fixtures.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/api/... -run UploadWorkflow -v` passes.
-- [ ] `go test ./internal/upload/... -v` passes.
-- [ ] The full upload flow is covered without Azure credentials.
+- [x] `go test ./internal/api/... -run UploadWorkflow -v` passes.
+- [x] `go test ./internal/upload/... -v` passes.
+- [x] The full upload flow is covered without Azure credentials.
 
 ## Open Questions Before Implementation
 

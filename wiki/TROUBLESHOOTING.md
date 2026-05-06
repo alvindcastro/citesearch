@@ -378,6 +378,117 @@ curl -s -X POST http://localhost:8000/banner/ingest \
 
 ---
 
+## Phase U Upload And Chunking
+
+### Upload succeeds but ask returns no results
+
+**Symptom:** `POST /banner/upload` returns an `upload_id`, but `/banner/ask` still returns no
+sources for that document.
+
+**Cause:** Upload stores the PDF and sidecar only. It does not index pages.
+
+**Fix:**
+
+```bash
+curl -s -X POST http://localhost:8000/banner/upload/chunk \
+  -H "Content-Type: application/json" \
+  -d '{"upload_id":"<upload-id>"}' | jq .
+
+curl -s http://localhost:8000/banner/upload/<upload-id>/status | jq .
+```
+
+Check that `status` is `partial` or `complete` and that `queryable_page_count` is greater than 0.
+
+---
+
+### Upload status returns 404
+
+**Symptom:** `GET /banner/upload/{upload_id}/status` returns 404.
+
+**Cause A:** Wrong `upload_id`.
+
+**Fix:**
+
+```bash
+curl -s http://localhost:8000/banner/upload | jq .
+```
+
+**Cause B:** The sidecar blob was deleted or written to a different Blob prefix/container.
+
+**Fix:** Check `AZURE_STORAGE_CONTAINER_NAME` and `AZURE_STORAGE_BLOB_PREFIX`, then upload the PDF
+again if the sidecar is missing.
+
+---
+
+### URL upload returns 400 "not allowlisted"
+
+**Cause:** The URL host is not in `UPLOAD_URL_ALLOWLIST`.
+
+**Fix:**
+
+```env
+UPLOAD_URL_ALLOWLIST=customercare.ellucian.com,ellucian.com,<your-host>
+```
+
+Restart the backend after changing `.env`.
+
+Nice to know: URL upload requires HTTPS. HTTP URLs are rejected even if the hostname is allowlisted.
+
+---
+
+### URL upload returns 413
+
+**Cause:** The downloaded file exceeds `MAX_UPLOAD_SIZE_MB`.
+
+**Fix options:**
+
+- Raise `MAX_UPLOAD_SIZE_MB` if the server has enough memory and request capacity.
+- Download the PDF manually, split it if needed, and use multipart upload.
+- Prefer staged chunking after upload so indexing can happen in smaller page ranges.
+
+---
+
+### Chunk returns 400 range overlap
+
+**Cause:** Requested `page_start`/`page_end` intersects an already chunked range.
+
+**Fix:**
+
+```bash
+curl -s http://localhost:8000/banner/upload/<upload-id>/status \
+  | jq '{chunked_ranges,unchunked_ranges,gap_summary}'
+```
+
+Choose a range entirely inside one of the `unchunked_ranges`, or omit `page_start` and `page_end`
+to chunk all remaining gaps.
+
+---
+
+### Chunk returns 409 in progress
+
+**Cause:** Another chunk request for the same `upload_id` is active in this API process.
+
+**Fix:** Wait for the active request to finish, then retry. For long PDFs, chunk smaller page ranges
+so each request completes sooner.
+
+---
+
+### Delete does not remove old search results
+
+**Symptom:** After `DELETE /banner/upload/{upload_id}`, old answers can still cite content from the
+deleted PDF.
+
+**Cause:** Delete currently removes the PDF blob and sidecar only. Azure AI Search purge is not
+implemented for Phase U uploads.
+
+**Fix options:**
+
+- Recreate the index and re-ingest the intended corpus.
+- Avoid delete/re-upload for already indexed uploads until exact purge is implemented.
+- Use delete only before chunking, or after a full index rebuild plan.
+
+---
+
 ## Confidence and escalation
 
 ### `escalate` is always `true`

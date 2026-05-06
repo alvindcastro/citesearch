@@ -797,13 +797,19 @@ This is the highest-impact UX improvement for the ask endpoints.
   sidecar range math, sidecar persistence, chunk orchestration, locks, status/list/delete
 - `internal/api/upload_*_test.go` — Phase U upload/chunk/status/list/delete handler behavior
   with fake Blob, fake page counter, fake ingest runner, fake clock, and fake IDs
+- `internal/api/upload_workflow_test.go` — offline route workflow coverage for multipart upload,
+  URL upload, status, chunk, list, delete, sparse gaps, and no indexing before chunk
 
 **What's not tested (and why it's hard):**
 - Azure clients — require live Azure credentials; no mock layer exists
 - RAG pipeline — depends on Azure OpenAI + Azure Search; would need dependency injection to mock
 - End-to-end ingestion — requires a real file system + Azure Search index
 
-**If you want to add integration tests:**
+**Offline route integration tests:**
+- `go test ./internal/api/... -run UploadWorkflow -v`
+- Uses `httptest` and fake dependencies; no live Azure, public network, OpenAI, or Search calls.
+
+**If you want to add live integration tests:**
 - Use a separate `.env.test` pointing at a test Azure Search index
 - Add a `TestMain()` that checks for test env vars and skips if not present
 - Test ingestion → query round trips against real data

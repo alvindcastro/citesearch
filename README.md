@@ -102,6 +102,12 @@ Estimated cost for dev/demo: ~$1–5/month. Use 10K TPM limits on both deploymen
 | POST | `/banner/ingest` | Ingest PDFs from `data/docs/banner` |
 | GET | `/banner/blob/list` | List PDFs in Azure Blob |
 | POST | `/banner/blob/sync` | Download from Blob and ingest |
+| POST | `/banner/upload` | Upload a Banner PDF to Blob and create sidecar state; does not index |
+| POST | `/banner/upload/from-url` | Download an allowlisted HTTPS PDF to Blob and create sidecar state; does not index |
+| POST | `/banner/upload/chunk` | Index all remaining pages, or one non-overlapping page range, for an uploaded PDF |
+| GET | `/banner/upload/{upload_id}/status` | Read upload sidecar status, chunked ranges, gaps, and queryable page count |
+| GET | `/banner/upload` | List tracked uploads and their chunking status |
+| DELETE | `/banner/upload/{upload_id}` | Delete uploaded PDF and sidecar; index purge is not implemented |
 | POST | `/banner/summarize/full` | Structured summary: changes, breaking, actions, compatibility |
 
 Key request fields for `/banner/ask`: `question` (required), `module_filter`, `version_filter`, `year_filter`, `top_k`, `mode` (`local`/`web`/`hybrid`/`auto`).
@@ -189,6 +195,11 @@ data/docs/
 
 Supported: `.pdf`, `.txt`, `.md`, `.docx`. SOPs must follow the `SOP<N> - <Title>.docx` naming convention.
 
+For cloud deployments without filesystem access, use the upload workflow instead:
+`POST /banner/upload` or `POST /banner/upload/from-url`, then `POST /banner/upload/chunk`.
+Phase U upload accepts PDF files only; DOCX, TXT, Markdown, and SOP upload are rejected.
+See [ingest/PDF_UPLOAD_FLOW.md](ingest/PDF_UPLOAD_FLOW.md).
+
 ---
 
 ## gRPC
@@ -242,6 +253,9 @@ UPLOAD_URL_ALLOWLIST=customercare.ellucian.com,ellucian.com
 | Guide | What it covers |
 |---|---|
 | [RUNBOOK.md](wiki/RUNBOOK.md) | **Start here** — end-to-end setup for all run paths |
+| [HOW-TO.md](wiki/HOW-TO.md) | Task recipes for running, ingesting, uploading, querying, and regenerating docs |
+| [DEVELOPER-GUIDE.md](wiki/DEVELOPER-GUIDE.md) | Repo map, code boundaries, endpoint workflow, and definition of done |
+| [TESTING.md](wiki/TESTING.md) | Test commands, test categories, live-test rules, and pre-handoff checklist |
 | [LOCAL-DEV.md](wiki/LOCAL-DEV.md) | Dev session startup, env vars, common commands |
 | [DOCKER-DEV.md](wiki/DOCKER-DEV.md) | Full Docker Compose stack (backend + adapter + ngrok) |
 | [BOTPRESS-SETUP.md](wiki/BOTPRESS-SETUP.md) | Botpress wiring, Execute Code snippets, testing options |
@@ -249,6 +263,7 @@ UPLOAD_URL_ALLOWLIST=customercare.ellucian.com,ellucian.com
 | [CHATBOT.md](wiki/CHATBOT.md) | Architecture, API surface, response shapes, user guide routing |
 | [INTERNALS.md](wiki/INTERNALS.md) | Design decisions, data flow, chunking strategy |
 | [TROUBLESHOOTING.md](wiki/TROUBLESHOOTING.md) | Symptoms → root cause → fix |
+| [NICE-TO-KNOW.md](wiki/NICE-TO-KNOW.md) | Practical context about scores, upload state, deletion, ngrok, and cost |
 | [INTEGRATIONS.md](wiki/INTEGRATIONS.md) | LangGraph, n8n, MCP integration ideas |
 | [OBSERVABILITY.md](wiki/OBSERVABILITY.md) | Logging, metrics, tracing |
 | [UPGRADES.md](wiki/UPGRADES.md) | API hardening, RAG quality, streaming, roadmap |
