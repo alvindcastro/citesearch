@@ -639,6 +639,78 @@ curl -s -X POST http://localhost:8000/banner/upload/from-url \
 
 ---
 
+### `POST /banner/upload/chunk` — chunk uploaded pages
+
+Chunk a page range of an already-uploaded PDF. The server resolves `upload_id` to its
+sidecar, downloads the PDF from Blob to a temporary local path, runs the ingest pipeline only
+for the requested pages, appends the completed range to `chunked_ranges`, recomputes derived
+sidecar fields, and writes the sidecar after each completed gap.
+
+**Request (application/json):**
+```json
+{
+  "upload_id": "a3f8c1d2-...",
+  "page_start": 1,
+  "page_end": 50
+}
+```
+
+Omit `page_start` and `page_end` to chunk all remaining unchunked ranges in ascending order:
+```json
+{
+  "upload_id": "a3f8c1d2-..."
+}
+```
+
+**Range rules:**
+- `upload_id` is required
+- `page_start` and `page_end` must be provided together
+- `page_start` must be at least 1
+- `page_end` must be greater than or equal to `page_start`
+- `page_end` must not exceed `total_pages`
+- Requested ranges must not overlap an existing `chunked_ranges` entry
+
+Overlap detection rejects a new range `[page_start, page_end]` when any existing
+`[s, e]` satisfies `page_start <= e AND page_end >= s`.
+
+**Response:**
+```json
+{
+  "upload_id": "a3f8c1d2-...",
+  "pages_chunked": 50,
+  "chunks_indexed": 38,
+  "gaps_processed": 1,
+  "gaps_remaining": 0,
+  "chunked_ranges": [{"start": 1, "end": 50}],
+  "unchunked_ranges": [{"start": 51, "end": 120}],
+  "status": "partial",
+  "chunking_pattern": "sequential",
+  "gap_count": 1,
+  "gap_summary": "1 gap: pages 51-120 (70 pages total unchunked)"
+}
+```
+
+`gaps_processed` and `gaps_remaining` are scoped to the current call. `gap_count` and
+`unchunked_ranges` describe the persisted sidecar state after the call.
+
+The sidecar can persist `chunk_ids` when an ingest runner returns them. The current production
+`ingest.Run()` summary reports chunk counts but not chunk IDs, so exact index purge remains
+deferred until the ingest result exposes those IDs.
+
+**Errors:**
+
+| Code | Cause |
+|---|---|
+| 400 | Missing `upload_id`, incomplete page range, overlap, or out-of-bounds page range. |
+| 404 | `upload_id` not found, PDF missing, or sidecar missing from Blob. |
+| 500 | Blob download, ingest, or sidecar write failed. |
+
+If chunking all remaining gaps fails midway, completed gaps stay recorded because the sidecar
+is written after each successful gap. Repeating the no-range request resumes from the remaining
+`unchunked_ranges`.
+
+---
+
 ### Azure Blob Storage as a durable PDF store
 
 The existing `POST /banner/blob/sync` downloads from Blob and ingests. Phase U upload stores

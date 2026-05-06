@@ -19,7 +19,7 @@ server and calls `POST /banner/ingest`. The handler walks the folder, extracts t
 embeds, and writes to Azure Search in one blocking call. Simple, but requires SSH access or a
 local dev environment. Not usable from Fly.io or a remote Docker deployment.
 
-**Generation 2 — upload-based (Phase M).** The operator sends the PDF to the server over
+**Generation 2 — upload-based (Phase U).** The operator sends the PDF to the server over
 HTTP. Upload and chunking are separate steps. Uploading stores the PDF in Azure Blob Storage
 and creates a sidecar tracking file. Chunking reads from Blob, runs the same pipeline as
 Generation 1, and updates the sidecar. A single PDF can be chunked in multiple rounds across
@@ -420,7 +420,7 @@ Operator has a PDF
 | Doc | What it adds |
 |---|---|
 | [INGEST.md](INGEST.md) | Full operator reference: folder structure, naming conventions, pre-ingest checklist, endpoint contracts, curl examples |
-| [PDF_UPLOAD_FLOW.md](PDF_UPLOAD_FLOW.md) | Phase M endpoint reference: request/response shapes, sidecar schema, partial and non-contiguous workflow examples, error reference |
+| [PDF_UPLOAD_FLOW.md](PDF_UPLOAD_FLOW.md) | Phase U endpoint reference: request/response shapes, sidecar schema, partial and non-contiguous workflow examples, error reference |
 | [INTERNALS.md](INTERNALS.md) § Data Flow: Ingestion Pipeline | Go implementation: package layout, handler flows, sidecar computation algorithms |
 | [CLAUDE_AGENTS.md](../wiki/CLAUDE_AGENTS.md) | Agent guidance; Agent 19 still needs to be added for the upload chunking wizard |
-| [TROUBLESHOOTING.md](../wiki/TROUBLESHOOTING.md) | General troubleshooting; Phase M upload/chunk errors still need a dedicated section |
+| [TROUBLESHOOTING.md](../wiki/TROUBLESHOOTING.md) | General troubleshooting; Phase U upload/chunk errors still need a dedicated section |

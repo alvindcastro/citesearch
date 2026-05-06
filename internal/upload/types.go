@@ -74,13 +74,16 @@ type UploadResponse struct {
 }
 
 type ChunkRequest struct {
-	UploadID  string `json:"upload_id"`
-	PageStart int    `json:"page_start,omitempty"`
-	PageEnd   int    `json:"page_end,omitempty"`
+	UploadID      string `json:"upload_id"`
+	PageStart     int    `json:"page_start,omitempty"`
+	PageEnd       int    `json:"page_end,omitempty"`
+	PagesPerBatch int    `json:"pages_per_batch,omitempty"`
 }
 
 type ChunkResponse struct {
 	SidecarState
+	PagesChunked  int `json:"pages_chunked"`
+	ChunksIndexed int `json:"chunks_indexed"`
 	GapsProcessed int `json:"gaps_processed"`
 	GapsRemaining int `json:"gaps_remaining"`
 }

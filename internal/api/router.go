@@ -47,6 +47,7 @@ func NewRouter(cfg *config.Config) *gin.Engine {
 		banner.POST("/ingest", h.BannerIngest)
 		banner.POST("/upload", h.BannerUpload)
 		banner.POST("/upload/from-url", h.BannerUploadFromURL)
+		banner.POST("/upload/chunk", h.BannerUploadChunk)
 
 		// ── Banner / Module-scoped ask ────────────────────────────────────────
 		// Handles /banner/:module/ask for any Banner module (finance, hr, etc.).

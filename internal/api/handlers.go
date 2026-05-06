@@ -5,6 +5,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -457,6 +458,39 @@ func (h *Handler) BannerUploadFromURL(c *gin.Context) {
 	c.JSON(http.StatusOK, resp)
 }
 
+// BannerUploadChunk godoc
+//
+//	@Summary	Chunk previously uploaded Banner PDF pages
+//	@Tags		banner
+//	@Accept		json
+//	@Produce	json
+//	@Param		body	body		upload.ChunkRequest	true	"Upload chunk request"
+//	@Success	200		{object}	upload.ChunkResponse
+//	@Failure	400		{object}	map[string]string
+//	@Failure	404		{object}	map[string]string
+//	@Failure	500		{object}	map[string]string
+//	@Router		/banner/upload/chunk [post]
+func (h *Handler) BannerUploadChunk(c *gin.Context) {
+	var req upload.ChunkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	service := h.uploadService
+	if service == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "AZURE_STORAGE_CONNECTION_STRING is not configured"})
+		return
+	}
+
+	resp, err := service.ChunkUpload(c.Request.Context(), req, 10)
+	if err != nil {
+		writeUploadError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
 func writeUploadError(c *gin.Context, err error) {
 	switch {
 	case errors.Is(err, upload.ErrUploadTooLarge), errors.Is(err, upload.ErrDownloadTooLarge):
@@ -469,9 +503,17 @@ func writeUploadError(c *gin.Context, err error) {
 		c.JSON(http.StatusRequestTimeout, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrDownloadRemoteServer):
 		c.JSON(http.StatusBadGateway, gin.H{"error": err.Error()})
+	case errors.Is(err, upload.ErrUploadNotFound):
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
 	case errors.Is(err, upload.ErrMissingSourceType),
 		errors.Is(err, upload.ErrUnsupportedSourceType),
 		errors.Is(err, upload.ErrSOPUploadUnsupported),
+		errors.Is(err, upload.ErrMissingUploadID),
+		errors.Is(err, upload.ErrIncompletePageRange),
+		errors.Is(err, upload.ErrRangeStart),
+		errors.Is(err, upload.ErrRangeOrder),
+		errors.Is(err, upload.ErrRangeEnd),
+		errors.Is(err, upload.ErrRangeOverlap),
 		errors.Is(err, upload.ErrMissingURL),
 		errors.Is(err, upload.ErrInvalidURL),
 		errors.Is(err, upload.ErrURLRequiresHTTPS),
@@ -504,7 +546,7 @@ func newUploadService(cfg *config.Config) *upload.Service {
 		PageCounter:    ingestPageCounter{},
 		Clock:          systemClock{},
 		IDGenerator:    randomIDGenerator{},
-		IngestRunner:   nil,
+		IngestRunner:   ingestRunner{cfg: cfg},
 		HTTPDownloader: upload.NewBoundedHTTPDownloader(upload.DefaultDownloadTimeout),
 	})
 }
@@ -529,6 +571,21 @@ func (randomIDGenerator) NewID() string {
 		return hex.EncodeToString([]byte(time.Now().UTC().Format(time.RFC3339Nano)))
 	}
 	return hex.EncodeToString(b)
+}
+
+type ingestRunner struct {
+	cfg *config.Config
+}
+
+func (r ingestRunner) Run(_ context.Context, req upload.IngestRequest) (upload.IngestResult, error) {
+	result, err := ingest.Run(r.cfg, req.LocalPath, req.Overwrite, req.PagesPerBatch, req.StartPage, req.EndPage)
+	if err != nil {
+		return upload.IngestResult{}, err
+	}
+	return upload.IngestResult{
+		DocumentsProcessed: result.DocumentsProcessed,
+		ChunksIndexed:      result.ChunksIndexed,
+	}, nil
 }
 
 type blobSyncRequest struct {

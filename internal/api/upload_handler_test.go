@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -356,12 +357,23 @@ func (f *fakeUploadPageCounter) CountPages(path string) (int, error) {
 }
 
 type fakeUploadIngestRunner struct {
-	calls int
+	calls      int
+	requests   []upload.IngestRequest
+	chunkIDs   []string
+	failOnCall int
 }
 
-func (f *fakeUploadIngestRunner) Run(context.Context, upload.IngestRequest) (upload.IngestResult, error) {
+func (f *fakeUploadIngestRunner) Run(_ context.Context, req upload.IngestRequest) (upload.IngestResult, error) {
 	f.calls++
-	return upload.IngestResult{}, nil
+	f.requests = append(f.requests, req)
+	if f.failOnCall > 0 && f.calls == f.failOnCall {
+		return upload.IngestResult{}, errors.New("ingest failed")
+	}
+	return upload.IngestResult{
+		DocumentsProcessed: 1,
+		ChunksIndexed:      len(f.chunkIDs),
+		ChunkIDs:           f.chunkIDs,
+	}, nil
 }
 
 type fakeUploadClock struct{}

@@ -103,7 +103,8 @@ func TestUploadPackage_ServiceKeepsDependenciesExplicit(t *testing.T) {
 }
 
 type fakeBlobStore struct {
-	blobs map[string][]byte
+	blobs          map[string][]byte
+	writeJSONCalls int
 }
 
 func (f *fakeBlobStore) Upload(_ context.Context, blobPath string, content io.Reader, _ string) error {
@@ -135,6 +136,7 @@ func (f *fakeBlobStore) ReadJSON(_ context.Context, blobPath string, dest any) e
 }
 
 func (f *fakeBlobStore) WriteJSON(_ context.Context, blobPath string, value any) error {
+	f.writeJSONCalls++
 	data, err := json.Marshal(value)
 	if err != nil {
 		return err

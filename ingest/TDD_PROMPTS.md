@@ -328,12 +328,12 @@ Acceptance criteria:
 
 ## Phase U.7 - Chunk Uploaded Pages
 
-- [ ] Add `POST /banner/upload/chunk`.
-- [ ] Read sidecar by `upload_id`.
-- [ ] Reject overlapping or out-of-bounds ranges.
-- [ ] If no page range is provided, process all unchunked gaps in ascending order.
-- [ ] Call the ingest pipeline only for requested gaps.
-- [ ] Write sidecar after each completed gap.
+- [x] Add `POST /banner/upload/chunk`.
+- [x] Read sidecar by `upload_id`.
+- [x] Reject overlapping or out-of-bounds ranges.
+- [x] If no page range is provided, process all unchunked gaps in ascending order.
+- [x] Call the ingest pipeline only for requested gaps.
+- [x] Write sidecar after each completed gap.
 
 Prompt for implementer:
 
@@ -346,33 +346,33 @@ return 400.
 
 Red tests:
 
-- [ ] `TestChunkUpload_NotFoundReturns404`
-- [ ] `TestChunkUpload_OverlapReturns400`
-- [ ] `TestChunkUpload_OutOfBoundsReturns400`
-- [ ] `TestChunkUpload_TargetedRangeCallsIngestWithStartEnd`
-- [ ] `TestChunkUpload_AllRemainingProcessesGapsInOrder`
-- [ ] `TestChunkUpload_WritesSidecarAfterEachGap`
-- [ ] `TestChunkUpload_FailureMidwayPreservesCompletedGaps`
-- [ ] `TestChunkUpload_ResponseIncludesGapCountsAndStatus`
+- [x] `TestChunkUpload_NotFoundReturns404`
+- [x] `TestChunkUpload_OverlapReturns400`
+- [x] `TestChunkUpload_OutOfBoundsReturns400`
+- [x] `TestChunkUpload_TargetedRangeCallsIngestWithStartEnd`
+- [x] `TestChunkUpload_AllRemainingProcessesGapsInOrder`
+- [x] `TestChunkUpload_WritesSidecarAfterEachGap`
+- [x] `TestChunkUpload_FailureMidwayPreservesCompletedGaps`
+- [x] `TestChunkUpload_ResponseIncludesGapCountsAndStatus`
 
 Green tasks:
 
-- [ ] Resolve `upload_id` to sidecar and blob path.
-- [ ] Download the source document to a temp path or stream it through the existing ingest path.
-- [ ] Use existing `ingest.Run()` page range support for PDFs.
-- [ ] Append chunked ranges with returned chunk IDs if available; otherwise document the limitation
+- [x] Resolve `upload_id` to sidecar and blob path.
+- [x] Download the source document to a temp path or stream it through the existing ingest path.
+- [x] Use existing `ingest.Run()` page range support for PDFs.
+- [x] Append chunked ranges with returned chunk IDs if available; otherwise document the limitation
       and add a follow-up phase to return IDs from ingest.
 
 Refactor tasks:
 
-- [ ] Keep chunk orchestration independent from Gin.
-- [ ] Make sidecar writes atomic from the upload service perspective.
+- [x] Keep chunk orchestration independent from Gin.
+- [x] Make sidecar writes atomic from the upload service perspective.
 
 Acceptance criteria:
 
-- [ ] `go test ./internal/upload/... -run Chunk -v` passes.
-- [ ] `go test ./internal/api/... -run ChunkUpload -v` passes.
-- [ ] `POST /banner/upload/chunk` is the only upload-flow endpoint that calls the ingest runner.
+- [x] `go test ./internal/upload/... -run Chunk -v` passes.
+- [x] `go test ./internal/api/... -run ChunkUpload -v` passes.
+- [x] `POST /banner/upload/chunk` is the only upload-flow endpoint that calls the ingest runner.
 
 ## Phase U.8 - Chunk Concurrency Guard
 

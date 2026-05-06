@@ -679,6 +679,21 @@ unchunked gaps exist, the adapter iterates all gaps in ascending order.
 }
 ```
 
+`gaps_processed` and `gaps_remaining` are scoped to the current call. `gap_count` and
+`unchunked_ranges` describe the persisted sidecar state after the call.
+
+The sidecar can persist `chunk_ids` when an ingest runner returns them. The current production
+`ingest.Run()` summary reports chunk counts but not chunk IDs, so exact index purge remains
+deferred until the ingest result exposes those IDs.
+
+**Errors:**
+
+| Code | Cause |
+|---|---|
+| 400 | Missing `upload_id`, incomplete page range, overlap, or out-of-bounds page range. |
+| 404 | `upload_id` not found, PDF missing, or sidecar missing from Blob. |
+| 500 | Blob download, ingest, or sidecar write failed. |
+
 ---
 
 ### `GET /banner/upload/{upload_id}/status`
