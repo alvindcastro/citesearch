@@ -243,7 +243,7 @@ curl -s -X POST http://localhost:8000/banner/ingest \
 ### Ingest SOP documents
 
 ```bash
-curl -s -X POST http://localhost:sop/ingest \
+curl -s -X POST http://localhost:8000/sop/ingest \
   -H "Content-Type: application/json" \
   -d '{
     "docs_path": "data/docs/sop",
@@ -350,9 +350,11 @@ Ellucian provides Banner user guides via the Ellucian Customer Center (ECC). Ste
 1. Log into ECC at `ellucian.com/customer-center`
 2. Navigate to **Documentation > Banner Finance**
 3. Download the current **User Reference Manual** (PDF)
-4. Place in `data/docs/banner/finance/use/Banner Finance - Use - Ellucian.pdf`
-5. Run: `curl -X POST http://localhost:8000/banner/ingest -d '{"docs_path":"data/docs/banner/finance/use","overwrite":false}'`
-6. Verify: `curl -X POST http://localhost:8000/banner/finance/ask -d '{"question":"How do I enter a journal entry?","source_type":"banner_user_guide"}'`
+4. For local bulk ingest, place it in `data/docs/banner/finance/use/Banner Finance - Use - Ellucian.pdf`
+   and run `/banner/ingest`.
+5. For Phase U cloud upload, call `POST /banner/upload` or `POST /banner/upload/from-url` with
+   `source_type=banner_user_guide` and `module=Finance`, then call `POST /banner/upload/chunk`.
+6. Verify only after chunking: `curl -X POST http://localhost:8000/banner/finance/ask -d '{"question":"How do I enter a journal entry?","source_type":"banner_user_guide"}'`
 
 ### Finance release notes
 
@@ -504,17 +506,19 @@ Phase U introduces upload paths that do not require filesystem access:
 | Upload — multipart (Phase U.5) | `POST /banner/upload` | Ad-hoc file upload to Blob. Creates sidecar. Does not chunk. |
 | Upload — from URL (Phase U.6) | `POST /banner/upload/from-url` | Ellucian ECC download links, automation. Creates sidecar. Does not chunk. |
 | Chunk (Phase U.7) | `POST /banner/upload/chunk` | Chunk a page range of an uploaded PDF. |
-| Status/list (Phase U.8/U.9) | `GET /banner/upload...` | Manage sidecar-backed upload state. |
+| Status/list (Phase U.9) | `GET /banner/upload...` | Manage sidecar-backed upload state. |
 | Delete (Phase U.10) | `DELETE /banner/upload/{id}` | Remove blob and sidecar. Exact index purge is deferred until chunk IDs are persisted reliably. |
 
 ---
 
 ### How the upload path works
 
-The upload flow is decoupled from chunking. An upload handler validates metadata, synthesizes
-the Blob path, writes the PDF to Azure Blob Storage, counts pages with `ingest.CountPages()`,
-and creates `{blob_path}.chunks.json`. It does not call Azure OpenAI, Azure AI Search, or
-`ingest.Run()` until a later chunk request.
+The upload flow is decoupled from chunking. An upload handler validates explicit upload metadata,
+synthesizes the Blob path, writes the PDF to Azure Blob Storage, counts pages with
+`ingest.CountPages()`, and creates `{blob_path}.chunks.json`. It does not call Azure OpenAI,
+Azure AI Search, or `ingest.Run()` until a later chunk request. The chunk step downloads the PDF
+to a temporary local path that mirrors the Blob path so the existing ingest metadata parser still
+sees the expected folder structure.
 
 **Blob path synthesis rules (upload metadata → blob path):**
 
@@ -691,8 +695,9 @@ Overlap detection rejects a new range `[page_start, page_end]` when any existing
 }
 ```
 
-`gaps_processed` and `gaps_remaining` are scoped to the current call. `gap_count` and
-`unchunked_ranges` describe the persisted sidecar state after the call.
+`gaps_processed` is scoped to the current call. In the current implementation,
+`gaps_remaining` reports `0` after the call returns; use persisted `gap_count` and
+`unchunked_ranges` to determine remaining work.
 
 The sidecar can persist `chunk_ids` when an ingest runner returns them. The current production
 `ingest.Run()` summary reports chunk counts but not chunk IDs, so exact index purge remains
@@ -755,8 +760,9 @@ without relying on local filesystem persistence.
 
 **Why this matters for cloud deployments:**
 - Container restarts lose the local `data/docs/` state
-- With Blob as source of truth, `POST /banner/blob/sync` on startup rebuilds the index from Blob
-- The sidecar persists across restarts — partial chunking state is never lost
+- Blob is the durable source for uploaded PDFs and sidecars
+- `POST /banner/blob/sync` remains a separate bulk-ingest path and does not manage Phase U sidecars
+- The sidecar persists across restarts, but if it is deleted or corrupted the upload is no longer tracked
 
 **Env vars required for Blob storage:**
 ```env
@@ -767,7 +773,7 @@ AZURE_STORAGE_BLOB_PREFIX=banner/          # optional prefix within the containe
 
 ---
 
-### Upload workflow pre-ingest checklist
+### Upload workflow pre-upload/pre-chunk checklist
 
 Before uploading a PDF:
 
@@ -779,6 +785,8 @@ Before uploading a PDF:
 - [ ] **PDF-only for Phase U**: SOP, DOCX, TXT, and Markdown upload are deferred
 - [ ] **File size**: PDF is under 100 MB (user guides rarely exceed 50 MB)
 - [ ] **Blob storage env**: `AZURE_STORAGE_CONNECTION_STRING` and `AZURE_STORAGE_CONTAINER_NAME` are configured
+- [ ] **Chunking plan**: upload alone is not queryable; queryability starts only after
+      `POST /banner/upload/chunk` completes for at least one page range
 
 ---
 

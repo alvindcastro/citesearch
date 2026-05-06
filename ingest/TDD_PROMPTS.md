@@ -490,15 +490,15 @@ Acceptance criteria:
 
 ## Phase U.11 - Operator and Agent Documentation
 
-- [ ] Update `wiki/INGEST.md` if endpoint behavior changed during implementation.
-- [ ] Update `wiki/INTERNALS.md` for new package responsibilities and sidecar limitations.
-- [ ] Update `CLAUDE.md` with routes, env vars, and operational constraints.
-- [ ] Add or update Claude Agent guidance for upload coordination and chunking.
-- [ ] Update API collection files if this repo treats them as maintained artifacts.
-- [ ] Reconcile Agent 18 guidance with the decoupled upload model; it must not promise immediate
+- [x] Update `wiki/INGEST.md` if endpoint behavior changed during implementation.
+- [x] Update `wiki/INTERNALS.md` for new package responsibilities and sidecar limitations.
+- [x] Update `CLAUDE.md` with routes, env vars, and operational constraints.
+- [x] Add or update Claude Agent guidance for upload coordination and chunking.
+- [x] Update API collection files if this repo treats them as maintained artifacts.
+- [x] Reconcile Agent 18 guidance with the decoupled upload model; it must not promise immediate
       queryability after upload unless a chunk call has completed.
-- [ ] Decide whether Agent 19 is the chunking wizard, the upload coordinator, or both.
-- [ ] Fix any stale examples discovered during implementation, including malformed curl URLs and
+- [x] Decide whether Agent 19 is the chunking wizard, the upload coordinator, or both.
+- [x] Fix any stale examples discovered during implementation, including malformed curl URLs and
       ingest time-estimate inconsistencies.
 
 Prompt for implementer:
@@ -511,24 +511,26 @@ Do not broaden documented behavior beyond what tests prove.
 
 Doc tasks:
 
-- [ ] Document `POST /banner/upload`.
-- [ ] Document `POST /banner/upload/from-url`.
-- [ ] Document `POST /banner/upload/chunk`.
-- [ ] Document `GET /banner/upload/{upload_id}/status`.
-- [ ] Document `GET /banner/upload`.
-- [ ] Document `DELETE /banner/upload/{upload_id}`.
-- [ ] Document `MAX_UPLOAD_SIZE_MB`.
-- [ ] Document `UPLOAD_URL_ALLOWLIST`.
-- [ ] Document sidecar failure and recovery behavior.
-- [ ] Document that upload is not queryable until chunking runs.
-- [ ] Document consistently that Phase U upload accepts PDFs only and does not support
+- [x] Document `POST /banner/upload`.
+- [x] Document `POST /banner/upload/from-url`.
+- [x] Document `POST /banner/upload/chunk`.
+- [x] Document `GET /banner/upload/{upload_id}/status`.
+- [x] Document `GET /banner/upload`.
+- [x] Document `DELETE /banner/upload/{upload_id}`.
+- [x] Document `MAX_UPLOAD_SIZE_MB`.
+- [x] Document `UPLOAD_URL_ALLOWLIST`.
+- [x] Document sidecar failure and recovery behavior.
+- [x] Document that upload is not queryable until chunking runs.
+- [x] Document consistently that Phase U upload accepts PDFs only and does not support
       DOCX/TXT/MD/SOP upload.
 
 Acceptance criteria:
 
-- [ ] Docs match implemented tests.
-- [ ] Agent instructions do not instruct the adapter to perform backend-only operations.
+- [x] Docs match implemented tests.
+- [x] Agent instructions do not instruct the adapter to perform backend-only operations.
 - [ ] `git diff --check -- '*.md'` is clean.
+      Note: Phase U.11 touched-MD diff is clean; the full repo check currently reports unrelated
+      pre-existing markdown whitespace in dirty files outside this phase.
 
 ## Phase U.12 - Integration Test Harness
 
@@ -572,9 +574,11 @@ Acceptance criteria:
 
 - [x] Should Phase U support only PDFs at first, or include `.docx`, `.txt`, and `.md` from day one?
       Decision: PDF-only for Phase U; non-PDF upload is deferred.
-- [ ] Should uploaded user guides reject `year` and `version` at validation time, as the docs say?
-- [ ] Should sidecar writes use Azure Blob leases for cross-instance concurrency, or is process-local
+- [x] Should uploaded user guides reject `year` and `version` at validation time, as the docs say?
+      Decision: yes; Phase U validation rejects `version` or `year` for `banner_user_guide`.
+- [x] Should sidecar writes use Azure Blob leases for cross-instance concurrency, or is process-local
       locking acceptable for the first pass?
+      Decision: process-local locking is accepted for the first pass.
 - [x] Should chunk IDs be returned from `ingest.Run()` so sidecars can support exact index purge?
       Decision: exact index purge is deferred until chunk IDs are reliably returned or persisted.
 - [x] Should `GET /banner/upload` list only sidecars, or also detect orphan PDFs with missing sidecars?

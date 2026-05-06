@@ -10,26 +10,27 @@ Covers *why* decisions were made, *how* things work internally, and *when* thing
 1. [Design Philosophy](#design-philosophy)
 2. [Why Go?](#why-go)
 3. [Package Responsibilities](#package-responsibilities)
-4. [Data Flow: Ingestion Pipeline](#data-flow-ingestion-pipeline)
-5. [Data Flow: RAG Query Pipeline](#data-flow-rag-query-pipeline)
+4. [Data Flow: Phase U Upload/Chunk Pipeline](#data-flow-phase-u-uploadchunk-pipeline)
+5. [Data Flow: Ingestion Pipeline](#data-flow-ingestion-pipeline)
+6. [Data Flow: RAG Query Pipeline](#data-flow-rag-query-pipeline)
    - [Auto-routing mode](#auto-routing-mode)
    - [Module-scoped routing](#module-scoped-routing)
    - [Student User Guide Pipelines](#student-user-guide-pipelines)
-6. [Chunking Strategies](#chunking-strategies)
-7. [Azure Search Index Design](#azure-search-index-design)
-8. [Why Direct HTTP (No Azure Go SDK)?](#why-direct-http-no-azure-go-sdk)
-9. [DOCX Parsing Without External Libraries](#docx-parsing-without-external-libraries)
-10. [Metadata Extraction from File Paths](#metadata-extraction-from-file-paths)
-11. [Deterministic Chunk IDs](#deterministic-chunk-ids)
-12. [Prompt Construction](#prompt-construction)
-13. [Rate Limit Handling](#rate-limit-handling)
-14. [Config: Fail Fast vs. Graceful](#config-fail-fast-vs-graceful)
-15. [gRPC: Why It Exists and Its Current State](#grpc-why-it-exists-and-its-current-state)
-16. [Known Limitations and Gotchas](#known-limitations-and-gotchas)
-17. [Where Things Can Go Wrong](#where-things-can-go-wrong)
-18. [How to Extend](#how-to-extend)
-19. [Testing Gaps](#testing-gaps)
-20. [Performance Notes](#performance-notes)
+7. [Chunking Strategies](#chunking-strategies)
+8. [Azure Search Index Design](#azure-search-index-design)
+9. [Why Direct HTTP (No Azure Go SDK)?](#why-direct-http-no-azure-go-sdk)
+10. [DOCX Parsing Without External Libraries](#docx-parsing-without-external-libraries)
+11. [Metadata Extraction from File Paths](#metadata-extraction-from-file-paths)
+12. [Deterministic Chunk IDs](#deterministic-chunk-ids)
+13. [Prompt Construction](#prompt-construction)
+14. [Rate Limit Handling](#rate-limit-handling)
+15. [Config: Fail Fast vs. Graceful](#config-fail-fast-vs-graceful)
+16. [gRPC: Why It Exists and Its Current State](#grpc-why-it-exists-and-its-current-state)
+17. [Known Limitations and Gotchas](#known-limitations-and-gotchas)
+18. [Where Things Can Go Wrong](#where-things-can-go-wrong)
+19. [How to Extend](#how-to-extend)
+20. [Testing Gaps](#testing-gaps)
+21. [Performance Notes](#performance-notes)
 
 ---
 
@@ -74,8 +75,10 @@ config/              → Loads env vars once. No logic. Panics if required vars 
 internal/azure/      → Thin HTTP clients for Azure services only: OpenAI, AI Search, Blob Storage.
 internal/websearch/  → Web search clients: Bing and Tavily. WebSearcher interface lives here.
 internal/ingest/     → Document pipeline: walk files → extract text → chunk → embed → upload.
+internal/upload/     → Phase U upload services: metadata validation, sidecar range math,
+                       sidecar CRUD, URL allowlist checks, chunk orchestration, delete/status/list.
 internal/rag/        → Query pipeline: embed question → hybrid search → build prompt → chat.
-internal/api/        → HTTP handlers and Gin router. Handlers are thin — delegate to rag/ingest.
+internal/api/        → HTTP handlers and Gin router. Handlers are thin — delegate to rag/ingest/upload.
 internal/grpcserver/ → gRPC handlers. Scaffolded, not fully implemented.
 cmd/                 → Entry points only. Wire config → dependencies → server start.
 proto/               → Service contracts. Source of truth for gRPC interface.
@@ -87,11 +90,76 @@ proto/               → Service contracts. Source of truth for gRPC interface.
 cmd → internal/api → internal/rag → internal/azure
                    → internal/ingest → internal/azure
                                      → internal/azure/openai (for embedding)
+                   → internal/upload → internal/blobstore
+                                     → internal/ingest (through injected IngestRunner only)
 config ← everything (leaf dependency, imports nothing internal)
 ```
 
 If you add a dependency that goes the other direction (e.g., `azure` importing `ingest`), you've
 introduced a cycle and it won't compile.
+
+---
+
+## Data Flow: Phase U Upload/Chunk Pipeline
+
+Phase U exists for cloud deployments where operators cannot place files under `data/docs/`.
+It is intentionally decoupled: upload stores the PDF and creates a sidecar, while chunking is
+a separate call that indexes selected page ranges.
+
+**Upload routes:**
+
+```
+POST /banner/upload
+  internal/api.BannerUpload()
+  → internal/upload.CreateUploadFromFile()
+  → validate metadata and PDF-only extension
+  → synthesize Blob path
+  → count pages with ingest.CountPages()
+  → write PDF to Blob
+  → write {blob_path}.chunks.json with status=pending and chunking_pattern=none
+
+POST /banner/upload/from-url
+  internal/api.BannerUploadFromURL()
+  → internal/upload.CreateUploadFromURL()
+  → require HTTPS and UPLOAD_URL_ALLOWLIST hostname
+  → bounded download with MAX_UPLOAD_SIZE_MB
+  → same CreateUploadFromFile() path after download
+```
+
+Upload routes do not call Azure OpenAI, Azure AI Search, or `ingest.Run()`. A successful upload
+is not queryable until a chunk request completes.
+
+**Chunk/status/list/delete routes:**
+
+```
+POST /banner/upload/chunk
+  → resolve upload_id by scanning sidecars
+  → reject overlapping or out-of-bounds ranges
+  → if no range, process all unchunked ranges in ascending order
+  → download PDF Blob to a temporary local path
+  → call ingest.Run() for each selected page range
+  → write sidecar after each successful gap
+
+GET /banner/upload/{upload_id}/status
+  → read sidecar and return derived status, gaps, queryable_page_count, remaining estimate
+
+GET /banner/upload
+  → list sidecar summaries sorted by uploaded_at descending
+
+DELETE /banner/upload/{upload_id}
+  → delete PDF Blob and sidecar only
+```
+
+Phase U upload accepts only `.pdf` files with `source_type=banner` or
+`source_type=banner_user_guide`. SOP, DOCX, TXT, and Markdown upload are deferred and rejected
+before Blob or sidecar writes.
+
+Sidecars live at `{blob_path}.chunks.json`. `unchunked_ranges`, `status`,
+`chunking_pattern`, `gap_count`, and `gap_summary` are derived from `total_pages` and
+`chunked_ranges`; callers should not treat those fields as source-of-truth input.
+
+`DELETE /banner/upload/{upload_id}?purge_index=true` returns 501 and leaves storage untouched
+until uploaded chunk IDs are reliably persisted and a tested Azure Search purge path exists.
 
 ---
 
@@ -385,6 +453,10 @@ name (e.g., `"Heading 1"`). The code looks up the display name in `styles.xml` t
 Banner PDF metadata (module, version, year) is extracted entirely from the file path. No PDF
 metadata parsing is done.
 
+This section applies to folder ingest and to the temporary local path created by Phase U chunking.
+Phase U upload itself uses explicit request metadata to synthesize the canonical Blob path before
+any ingest pipeline call runs.
+
 **Why:** Ellucian Banner release note PDFs embed metadata inconsistently. Parsing the filename and
 folder structure is more reliable.
 
@@ -629,6 +701,21 @@ try to build the gRPC server without running `buf generate` first, it will fail 
 grpcserver package imports anything from `gen/go/`. Currently the imports are commented out to
 prevent this.
 
+### 8. Phase U Sidecar Is Authoritative
+
+Upload/chunk state lives only in `{blob_path}.chunks.json`. If that sidecar is missing or corrupt,
+the PDF may still exist in Blob Storage, but status/list/chunk/delete cannot track it by
+`upload_id`. Re-upload or repair the sidecar manually.
+
+Chunk concurrency is guarded with a process-local lock. Two chunk calls for the same `upload_id`
+in the same API process return 409, but this is not a cross-instance Azure Blob lease.
+
+`DELETE /banner/upload/{upload_id}` deletes the PDF and sidecar only. It does not purge Azure
+Search chunks, and `purge_index=true` returns 501 until exact purge support is implemented.
+
+Successful upload is not queryable. Queryability starts only after `POST /banner/upload/chunk`
+completes for one or more page ranges.
+
 ---
 
 ## Where Things Can Go Wrong
@@ -706,11 +793,14 @@ This is the highest-impact UX improvement for the ask endpoints.
 - `internal/ingest/docx_test.go` — DOCX paragraph extraction (unit)
 - `internal/ingest/sop_chunker_test.go` — SOP section chunking (unit)
 - `internal/ingest/sop_test.go` — SOP filename parsing (unit)
+- `internal/upload/*_test.go` — Phase U metadata validation, URL allowlist checks,
+  sidecar range math, sidecar persistence, chunk orchestration, locks, status/list/delete
+- `internal/api/upload_*_test.go` — Phase U upload/chunk/status/list/delete handler behavior
+  with fake Blob, fake page counter, fake ingest runner, fake clock, and fake IDs
 
 **What's not tested (and why it's hard):**
 - Azure clients — require live Azure credentials; no mock layer exists
 - RAG pipeline — depends on Azure OpenAI + Azure Search; would need dependency injection to mock
-- HTTP handlers — could be unit tested with `httptest.NewRecorder()` but would need Azure mocks
 - End-to-end ingestion — requires a real file system + Azure Search index
 
 **If you want to add integration tests:**

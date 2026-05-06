@@ -134,8 +134,9 @@ flow.
 
 ## Blob Path Convention
 
-The adapter synthesizes the blob path from upload metadata using the same rules as the
-existing ingestion pipeline. The blob path mirrors the local `data/docs/` folder structure.
+The adapter synthesizes the Blob path from explicit upload metadata. The resulting path mirrors
+the local `data/docs/` folder structure so the later chunk step can reuse the existing ingest
+pipeline metadata rules when it downloads the PDF to a temporary local path.
 
 | source_type | module | year | Blob path |
 |---|---|---|---|
@@ -149,6 +150,10 @@ The sidecar blob path is always `{blob_path}.chunks.json`.
 **Uniqueness assumption:** One PDF per blob path. If a file is re-uploaded at the same path,
 the adapter returns a 409 Conflict. To replace a PDF, delete the existing blob and sidecar
 first via `DELETE /banner/upload/{upload_id}`, then re-upload.
+
+Delete/re-upload does not purge Azure Search chunks for pages that were already chunked. Clean
+replacement is available before chunking, after a full index rebuild, or after future exact purge
+support is implemented.
 
 ---
 
@@ -301,8 +306,9 @@ existing entry in `chunked_ranges`. Rejected if for any existing `[s, e]`:
 }
 ```
 
-`gaps_processed` and `gaps_remaining` reflect how many unchunked intervals were processed
-in this call. For a targeted range call, these are 1 and 0 respectively.
+`gaps_processed` reflects how many unchunked intervals were processed in this call. In the current
+implementation, `gaps_remaining` reports `0` after the call returns; use persisted `gap_count` and
+`unchunked_ranges` to determine remaining work.
 
 **Errors:**
 
