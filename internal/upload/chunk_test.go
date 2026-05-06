@@ -3,6 +3,7 @@ package upload
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -100,8 +101,9 @@ func TestChunkUpload_TargetedRangeCallsIngestWithStartEnd(t *testing.T) {
 	if req.LocalPath == "" {
 		t.Fatal("expected downloaded local path in ingest request")
 	}
-	if !strings.Contains(req.LocalPath, blobPath) {
-		t.Fatalf("local path %q does not preserve blob path %q", req.LocalPath, blobPath)
+	expectedLocalPathSuffix := filepath.FromSlash(blobPath)
+	if !strings.Contains(req.LocalPath, expectedLocalPathSuffix) {
+		t.Fatalf("local path %q does not preserve blob path %q", req.LocalPath, expectedLocalPathSuffix)
 	}
 	if resp.GapsProcessed != 1 || resp.GapsRemaining != 0 {
 		t.Fatalf("response gaps: processed=%d remaining=%d", resp.GapsProcessed, resp.GapsRemaining)
