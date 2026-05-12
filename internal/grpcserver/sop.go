@@ -1,6 +1,5 @@
 // internal/grpcserver/sop.go
-// Implements SOPServiceServer (ask, ingest, list).
-// Uncomment the body after running `buf generate`.
+// Parked SOPService scaffold. REST handlers are the supported implementation.
 package grpcserver
 
 // import (

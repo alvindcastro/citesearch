@@ -1,5 +1,5 @@
 // internal/grpcserver/server.go
-// gRPC server wiring. Run `buf generate` first to produce gen/go/citesearch/v1/*.
+// Parked gRPC scaffold. REST is the supported runtime API.
 package grpcserver
 
 import (
@@ -11,24 +11,24 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
-	// Uncomment after running `buf generate`:
+	// Historical proto registration, kept only if gRPC is intentionally revived:
 	// citesearchv1 "citesearch/gen/go/citesearch/v1"
 )
 
-// Server wraps a gRPC server with all service handlers registered.
+// Server wraps the parked gRPC server scaffold.
 type Server struct {
 	cfg    *config.Config
 	server *grpc.Server
 }
 
-// New creates and configures the gRPC server.
+// New creates the reflection-only scaffold. Supported behavior lives in REST handlers.
 func New(cfg *config.Config) *Server {
 	s := grpc.NewServer()
 
-	// reflection lets grpcurl / gRPC UI discover services without a .proto file
+	// Reflection is left for scaffold introspection, not as an advertised API surface.
 	reflection.Register(s)
 
-	// TODO: uncomment after `buf generate` and implement handler types below
+	// Intentionally inactive. Prefer extending REST unless a future requirement needs gRPC.
 	// citesearchv1.RegisterSystemServiceServer(s, &systemHandler{cfg: cfg})
 	// citesearchv1.RegisterBannerServiceServer(s, &bannerHandler{cfg: cfg})
 	// citesearchv1.RegisterSOPServiceServer(s, &sopHandler{cfg: cfg})
@@ -36,13 +36,13 @@ func New(cfg *config.Config) *Server {
 	return &Server{cfg: cfg, server: s}
 }
 
-// ListenAndServe starts the gRPC listener on the given port (e.g. "9000").
+// ListenAndServe starts the parked listener only for explicit scaffold experiments.
 func (s *Server) ListenAndServe(port string) error {
 	lis, err := net.Listen("tcp", fmt.Sprintf(":%s", port))
 	if err != nil {
 		return fmt.Errorf("grpc listen: %w", err)
 	}
-	log.Printf("gRPC server listening on :%s", port)
+	log.Printf("parked gRPC scaffold listening on :%s; REST remains the supported API", port)
 	return s.server.Serve(lis)
 }
 

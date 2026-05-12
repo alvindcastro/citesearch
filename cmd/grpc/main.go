@@ -1,6 +1,6 @@
 // cmd/grpc/main.go
-// Entry point for the gRPC server.
-// Run alongside (or instead of) the HTTP server in cmd/main.go.
+// Parked gRPC scaffold.
+// REST in cmd/main.go is the supported runtime API; do not run this for demos or deploys.
 package main
 
 import (

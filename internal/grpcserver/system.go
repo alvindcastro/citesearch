@@ -1,6 +1,5 @@
 // internal/grpcserver/system.go
-// Implements SystemServiceServer (health, index stats, create index).
-// Uncomment the body after running `buf generate`.
+// Parked SystemService scaffold. REST handlers are the supported implementation.
 package grpcserver
 
 // import (

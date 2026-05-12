@@ -1,6 +1,5 @@
 // internal/grpcserver/banner.go
-// Implements BannerServiceServer (ask, ingest, blob, summarize).
-// Uncomment the body after running `buf generate`.
+// Parked BannerService scaffold. REST handlers are the supported implementation.
 package grpcserver
 
 // import (
