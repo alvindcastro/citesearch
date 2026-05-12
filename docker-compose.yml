@@ -8,7 +8,7 @@ services:
     image: citesearch
     command: ["./citesearch-http"]
     ports:
-      - "8000:8000"
+      - "${CITESEARCH_HTTP_PORT:-8000}:8000"
     env_file:
       - .env
     volumes:
@@ -27,7 +27,7 @@ services:
     image: citesearch
     command: ["./citesearch-grpc"]
     ports:
-      - "9000:9000"
+      - "${CITESEARCH_GRPC_PORT:-9000}:9000"
     env_file:
       - .env
     volumes:
@@ -46,7 +46,7 @@ services:
       dockerfile: Dockerfile.adapter
     image: ask-banner-adapter
     ports:
-      - "8081:8080"
+      - "${CHATBOT_ADAPTER_PORT:-8080}:8080"
     environment:
       RAG_BACKEND_URL: http://http:8000   # Docker service DNS — no ngrok needed here
     depends_on:
@@ -72,7 +72,7 @@ services:
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
     ports:
-      - "4040:4040"   # ngrok inspector / web UI
+      - "${NGROK_WEB_PORT:-4040}:4040"   # ngrok inspector / web UI
     depends_on:
       adapter:
         condition: service_healthy
