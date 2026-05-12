@@ -21,28 +21,6 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # gRPC interface (same binary set, different command).
-  # Optional — omit if you only need the HTTP API.
-  grpc:
-    image: citesearch
-    command: ["./citesearch-grpc"]
-    ports:
-      - "${CITESEARCH_GRPC_PORT:-9083}:9083"
-    env_file:
-      - .env
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      http:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 9083"]
-      interval: 30s
-      timeout: 5s
-      start_period: 10s
-      retries: 3
-    restart: unless-stopped
-
   # ── Botpress Adapter ─────────────────────────────────────────────────────────
   # Builds from Dockerfile.adapter (lean ~15 MB image, no Azure deps).
   # Talks to the backend over Docker's internal network — no ngrok for the backend.

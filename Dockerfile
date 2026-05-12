@@ -21,11 +21,6 @@ RUN go run github.com/swaggo/swag/cmd/swag@v1.16.6 \
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
     go build -ldflags="-s -w" -o /dist/citesearch-http ./cmd/main.go
 
-# Build gRPC server
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-    go build -ldflags="-s -w" -o /dist/citesearch-grpc ./cmd/grpc/main.go
-
-
 # ── Stage 2: Final image ──────────────────────────────────────────────────────
 FROM alpine:3.21
 
@@ -40,7 +35,6 @@ WORKDIR /app
 
 # Binaries
 COPY --from=builder /dist/citesearch-http  ./citesearch-http
-COPY --from=builder /dist/citesearch-grpc  ./citesearch-grpc
 
 # Generated Swagger docs (served at /docs by the HTTP server)
 COPY --from=builder /build/docs ./docs
@@ -52,10 +46,9 @@ RUN chown -R appuser:appgroup /app
 USER appuser
 
 EXPOSE 9080
-EXPOSE 9083
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD wget -qO- http://localhost:9080/health || exit 1
 
-# Default: HTTP server. Override with ./citesearch-grpc for the gRPC container.
+# REST HTTP server is the supported runtime.
 CMD ["./citesearch-http"]

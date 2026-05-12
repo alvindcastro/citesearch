@@ -7,6 +7,7 @@ The project documentation was moved to the central docs repo:
 - `$DOCS_ROOT/docs/ai-bot/README.md`
 - `$DOCS_ROOT/docs/ai-bot/PORTS.md`
 
-Default local ports are HTTP `9080`, adapter `9082`, gRPC `9083`, and ngrok inspector `9404`.
+Default local ports are HTTP `9080`, adapter `9082`, and ngrok inspector `9404`.
+REST is the supported runtime surface; the gRPC/proto scaffold is parked.
 
 Use this source repo for Go code, API handlers, Botpress adapter code, ingest/runtime code, and local development assets.
