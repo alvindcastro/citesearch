@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"citesearch/internal/adapter"
 	"citesearch/internal/intent"
@@ -56,6 +57,8 @@ func (h *ChatHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // askHandler returns the http.HandlerFunc for POST /chat/ask.
 func askHandler(client AdapterClient) http.HandlerFunc {
+	classifier := intent.NewClassifier(intent.DefaultIntentConfig())
+
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
@@ -79,7 +82,11 @@ func askHandler(client AdapterClient) http.HandlerFunc {
 		// Resolve effective source: explicit field wins; otherwise derive from intent.
 		source := req.Source
 		if source == "" || source == "auto" {
-			source = sourceFromIntent(req.Intent)
+			intentName := req.Intent
+			if intentName == "" || intentName == string(intent.General) {
+				intentName = string(classifier.Classify(req.Message).Intent)
+			}
+			source = sourceFromIntent(intentName, req.Message)
 		}
 
 		var (
@@ -180,20 +187,45 @@ func intentHandler(classifier *intent.Classifier) http.HandlerFunc {
 	}
 }
 
-// sourceFromIntent maps an intent name to a routing source string.
+// sourceFromIntent maps an intent name and message to a routing source string.
 // Returns "banner" for unknown or catch-all intents so every query always
 // carries a module context — prevents 0-result searches against the backend.
-func sourceFromIntent(i string) string {
+func sourceFromIntent(i string, message string) string {
 	switch i {
 	case "BannerFinance":
 		return "finance"
 	case "SopQuery":
 		return "sop"
 	case "BannerUsage":
-		return "user_guide"
+		return userGuideSourceFromMessage(message)
 	default: // BannerRelease, BannerAdmin, General, unknown
 		return "banner"
 	}
+}
+
+func userGuideSourceFromMessage(message string) string {
+	lower := strings.ToLower(message)
+	if containsAny(lower, []string{
+		"student", "register for classes", "registration", "course registration",
+		"class schedule", "course schedule", "add/drop", "enrollment", "enrolment",
+	}) {
+		return "user_guide_student"
+	}
+	if containsAny(lower, []string{
+		"finance", "journal", "ledger", "budget", "fund", "foapal", "requisition",
+	}) {
+		return "user_guide_finance"
+	}
+	return "user_guide"
+}
+
+func containsAny(value string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(value, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 // writeJSONError writes a structured JSON error — never leaks upstream details.

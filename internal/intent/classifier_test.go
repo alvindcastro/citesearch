@@ -72,6 +72,8 @@ func TestClassifier_BannerUsage(t *testing.T) {
 	}{
 		{"How do I navigate the Banner main menu?", BannerUsage},
 		{"Where do I find the journal entry form in Banner?", BannerUsage},
+		{"How do I register for classes?", BannerUsage},
+		{"Where do I register for classes?", BannerUsage},
 		{"How to use the Banner Finance module", BannerUsage},
 		{"How to restart the Banner server", SopQuery},
 		{"What changed in Banner Finance?", BannerRelease},

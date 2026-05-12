@@ -52,6 +52,8 @@ func DefaultIntentConfig() IntentConfig {
 			"permission", "module", "install", "setup",
 		},
 		BannerUsage: []string{
+			"how do i register for classes", "register for classes",
+			"class registration", "course registration",
 			"how to use", "how do i navigate", "navigate banner", "banner navigation",
 			"banner form", "banner screen", "banner menu",
 			"user guide", "where do i", "look up a",

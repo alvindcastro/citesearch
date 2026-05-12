@@ -22,6 +22,10 @@ blog/
 *.code-workspace
 *.iml
 
+# Local toolchains and caches
+.tmp/
+.tooling/
+
 # OS
 .DS_Store
 Thumbs.db

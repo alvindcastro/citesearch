@@ -356,6 +356,26 @@ func TestChatAsk_UserGuide_Student(t *testing.T) {
 	assert.Equal(t, "student", gotModule)
 }
 
+func TestChatAsk_AutoClassifiesStudentGuide(t *testing.T) {
+	var gotModule string
+	mockClient := &mockAdapterClient{
+		askBannerGuideFn: func(_ context.Context, _ string, module string) (AdapterResponse, error) {
+			gotModule = module
+			return AdapterResponse{Answer: "Student registration answer.", Confidence: 0.03}, nil
+		},
+	}
+
+	body := `{"message":"How do I register for classes?","session_id":"s-student","intent":"General","source":"auto"}`
+	req := httptest.NewRequest(http.MethodPost, "/chat/ask", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	NewChatHandler(mockClient).ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "student", gotModule)
+}
+
 func TestChatAsk_UserGuide_Finance(t *testing.T) {
 	var gotModule string
 	mockClient := &mockAdapterClient{
