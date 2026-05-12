@@ -90,8 +90,8 @@ func Load() *Config {
 		TopKDefault:  getEnvInt("TOP_K_DEFAULT", 5),
 
 		// API
-		APIPort:            getEnv("API_PORT", "8000"),
-		GRPCPort:           getEnv("GRPC_PORT", "9000"),
+		APIPort:            getEnv("API_PORT", "9080"),
+		GRPCPort:           getEnv("GRPC_PORT", "9083"),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
 		APIKey:             getEnv("API_KEY", ""),
 		MaxUploadSizeMB:    getEnvInt("MAX_UPLOAD_SIZE_MB", 100),

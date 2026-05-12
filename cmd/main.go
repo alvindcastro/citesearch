@@ -5,7 +5,7 @@
 //	@title			CiteSearch API
 //	@version		1.0
 //	@description	RAG pipeline over Banner release notes and Standard Operating Procedures (SOPs), backed by Azure OpenAI and Azure Cognitive Search.
-//	@host			localhost:8000
+//	@host			localhost:9080
 //	@BasePath		/
 
 package main

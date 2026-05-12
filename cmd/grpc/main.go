@@ -15,7 +15,7 @@ func main() {
 
 	port := cfg.GRPCPort
 	if port == "" {
-		port = "9000"
+		port = "9083"
 	}
 
 	s := grpcserver.New(cfg)

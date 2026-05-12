@@ -11,7 +11,7 @@ http:
 runtime:
   variables:
     - name: base_url
-      value: http://localhost:8000
+      value: http://localhost:9080
 
 settings:
   encodeUrl: true

@@ -51,11 +51,11 @@ RUN mkdir -p data/docs/banner data/docs/sop
 RUN chown -R appuser:appgroup /app
 USER appuser
 
-EXPOSE 8000
-EXPOSE 9000
+EXPOSE 9080
+EXPOSE 9083
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget -qO- http://localhost:8000/health || exit 1
+    CMD wget -qO- http://localhost:9080/health || exit 1
 
 # Default: HTTP server. Override with ./citesearch-grpc for the gRPC container.
 CMD ["./citesearch-http"]

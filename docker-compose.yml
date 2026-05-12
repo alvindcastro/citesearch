@@ -8,13 +8,13 @@ services:
     image: citesearch
     command: ["./citesearch-http"]
     ports:
-      - "${CITESEARCH_HTTP_PORT:-8000}:8000"
+      - "${CITESEARCH_HTTP_PORT:-9080}:9080"
     env_file:
       - .env
     volumes:
       - ./data:/app/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8000/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:9080/health"]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -27,7 +27,7 @@ services:
     image: citesearch
     command: ["./citesearch-grpc"]
     ports:
-      - "${CITESEARCH_GRPC_PORT:-9000}:9000"
+      - "${CITESEARCH_GRPC_PORT:-9083}:9083"
     env_file:
       - .env
     volumes:
@@ -36,7 +36,7 @@ services:
       http:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "nc -z localhost 9000"]
+      test: ["CMD-SHELL", "nc -z localhost 9083"]
       interval: 30s
       timeout: 5s
       start_period: 10s
@@ -52,14 +52,15 @@ services:
       dockerfile: Dockerfile.adapter
     image: ask-banner-adapter
     ports:
-      - "${CHATBOT_ADAPTER_PORT:-8080}:8080"
+      - "${CHATBOT_ADAPTER_PORT:-9082}:9082"
     environment:
-      RAG_BACKEND_URL: http://http:8000   # Docker service DNS — no ngrok needed here
+      PORT: "9082"
+      RAG_BACKEND_URL: http://http:9080   # Docker service DNS — no ngrok needed here
     depends_on:
       http:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:9082/health"]
       interval: 15s
       timeout: 5s
       start_period: 10s
@@ -67,18 +68,18 @@ services:
     restart: unless-stopped
 
   # ── ngrok tunnel ─────────────────────────────────────────────────────────────
-  # Exposes the adapter (port 8080) to Botpress Cloud via a public HTTPS URL.
+  # Exposes the adapter (port 9082) to Botpress Cloud via a public HTTPS URL.
   # Requires NGROK_AUTHTOKEN in .env.
   # After startup, get the public URL:
-  #   curl -s http://localhost:4040/api/tunnels | jq -r '.tunnels[0].public_url'
+  #   curl -s http://localhost:9404/api/tunnels | jq -r '.tunnels[0].public_url'
   # Set that URL as RAG_ADAPTER_URL in Botpress Cloud → Configuration → Environment Variables.
   ngrok:
     image: ngrok/ngrok:latest
-    command: http adapter:8080 --log stdout
+    command: http adapter:9082 --log stdout
     environment:
       NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
     ports:
-      - "${NGROK_WEB_PORT:-4040}:4040"   # ngrok inspector / web UI
+      - "${NGROK_WEB_PORT:-9404}:4040"   # ngrok inspector / web UI
     depends_on:
       adapter:
         condition: service_healthy

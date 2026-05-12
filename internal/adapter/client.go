@@ -66,7 +66,7 @@ type AdapterClient struct {
 	http    *http.Client
 }
 
-// NewAdapterClient returns a client pointed at baseURL (e.g. "http://localhost:8000").
+// NewAdapterClient returns a client pointed at baseURL (e.g. "http://localhost:9080").
 func NewAdapterClient(baseURL string) *AdapterClient {
 	return &AdapterClient{
 		baseURL: baseURL,

@@ -33,11 +33,11 @@ COPY --from=builder /dist/ask-banner ./ask-banner
 RUN chown -R appuser:appgroup /app
 USER appuser
 
-EXPOSE 8080
+EXPOSE 9082
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8080/health || exit 1
+    CMD wget -qO- http://localhost:9082/health || exit 1
 
 # Runtime env vars (set as Fly secrets, not baked in):
-#   RAG_BACKEND_URL — ngrok tunnel URL pointing at localhost:8000
+#   RAG_BACKEND_URL — ngrok tunnel URL pointing at localhost:9080
 CMD ["./ask-banner"]
