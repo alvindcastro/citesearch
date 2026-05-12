@@ -117,14 +117,18 @@ func askHandler(client AdapterClient) http.HandlerFunc {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp)
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		}
 	}
 }
 
 // healthHandler handles GET /health.
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+	}
 }
 
 // sentimentHandler returns the http.HandlerFunc for POST /chat/sentiment.
@@ -150,10 +154,12 @@ func sentimentHandler(analyzer *sentiment.Analyzer) http.HandlerFunc {
 		result := analyzer.Analyze(req.Message)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"sentiment": string(result.Sentiment),
 			"score":     result.Score,
-		})
+		}); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		}
 	}
 }
 
@@ -180,10 +186,12 @@ func intentHandler(classifier *intent.Classifier) http.HandlerFunc {
 		result := classifier.Classify(req.Message)
 
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		if err := json.NewEncoder(w).Encode(map[string]interface{}{
 			"intent":     string(result.Intent),
 			"confidence": result.Confidence,
-		})
+		}); err != nil {
+			http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		}
 	}
 }
 
@@ -232,5 +240,5 @@ func containsAny(value string, needles []string) bool {
 func writeJSONError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }

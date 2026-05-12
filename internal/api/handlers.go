@@ -125,7 +125,11 @@ func (h *Handler) ListChunks(c *gin.Context) {
 		h.cfg.AzureSearchIndexName,
 	)
 
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
 	req.Header.Set("api-key", h.cfg.AzureSearchAPIKey)
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -137,7 +141,10 @@ func (h *Handler) ListChunks(c *gin.Context) {
 	defer resp.Body.Close()
 
 	var result any
-	json.NewDecoder(resp.Body).Decode(&result)
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to decode search response"})
+		return
+	}
 	c.JSON(http.StatusOK, result)
 }
 

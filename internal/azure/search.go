@@ -51,7 +51,10 @@ func (c *SearchClient) CreateIndex() error {
 		c.cfg.AzureSearchIndexName,
 	)
 
-	deleteReq, _ := http.NewRequest(http.MethodDelete, deleteURL, nil)
+	deleteReq, err := http.NewRequest(http.MethodDelete, deleteURL, nil)
+	if err != nil {
+		return fmt.Errorf("build delete index request: %w", err)
+	}
 	deleteReq.Header.Set("api-key", c.cfg.AzureSearchAPIKey)
 
 	deleteResp, err := c.httpClient.Do(deleteReq)
@@ -126,7 +129,10 @@ func (c *SearchClient) CreateIndex() error {
 		},
 	}
 
-	payload, _ := json.Marshal(indexDef)
+	payload, err := json.Marshal(indexDef)
+	if err != nil {
+		return fmt.Errorf("marshal index definition: %w", err)
+	}
 	req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(payload))
 	if err != nil {
 		return err
@@ -168,9 +174,14 @@ func (c *SearchClient) ListSOPs() ([]SOPEntry, error) {
 		"select": "sop_number,document_title",
 		"top":    1000,
 	}
-	payload, _ := json.Marshal(body)
-
-	req, _ := http.NewRequest(http.MethodPost, searchURL, bytes.NewReader(payload))
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal list sops request: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, searchURL, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("build list sops request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("api-key", c.cfg.AzureSearchAPIKey)
 
@@ -180,7 +191,10 @@ func (c *SearchClient) ListSOPs() ([]SOPEntry, error) {
 	}
 	defer resp.Body.Close()
 
-	respBytes, _ := io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read list sops response: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("list sops HTTP %d: %s", resp.StatusCode, string(respBytes))
 	}
@@ -224,7 +238,10 @@ func (c *SearchClient) GetDocumentCount() (int64, error) {
 		c.cfg.AzureSearchIndexName,
 	)
 
-	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return 0, fmt.Errorf("build count request: %w", err)
+	}
 	req.Header.Set("api-key", c.cfg.AzureSearchAPIKey)
 
 	resp, err := c.httpClient.Do(req)
@@ -233,7 +250,10 @@ func (c *SearchClient) GetDocumentCount() (int64, error) {
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, fmt.Errorf("read count response: %w", err)
+	}
 	var count int64
 	if err := json.Unmarshal(body, &count); err != nil {
 		return 0, fmt.Errorf("parse count: %w", err)
@@ -278,9 +298,14 @@ func (c *SearchClient) UploadDocuments(docs []ChunkDocument) error {
 	}
 
 	body := map[string]any{"value": actions}
-	payload, _ := json.Marshal(body)
-
-	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("marshal upload docs request: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("build upload docs request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("api-key", c.cfg.AzureSearchAPIKey)
 
@@ -370,8 +395,14 @@ func (c *SearchClient) HybridSearch(
 		searchBody["filter"] = strings.Join(filters, " and ")
 	}
 
-	payload, _ := json.Marshal(searchBody)
-	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	payload, err := json.Marshal(searchBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal search request: %w", err)
+	}
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return nil, fmt.Errorf("build search request: %w", err)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("api-key", c.cfg.AzureSearchAPIKey)
 
@@ -381,7 +412,10 @@ func (c *SearchClient) HybridSearch(
 	}
 	defer resp.Body.Close()
 
-	respBytes, _ := io.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read search response: %w", err)
+	}
 	if resp.StatusCode >= 400 {
 		return nil, fmt.Errorf("search HTTP %d: %s", resp.StatusCode, string(respBytes))
 	}

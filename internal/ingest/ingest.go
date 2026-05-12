@@ -380,7 +380,7 @@ func ingestFile(
 		for _, page := range batch {
 			// Choose chunking strategy based on document type.
 			var schunks []sectionChunk
-			if sourceType == "banner_user_guide" {
+			if sourceType == azure.SourceTypeBannerGuide {
 				var updated string
 				schunks, updated = chunkStudentText(page.text, currentSection, cfg.ChunkSize, cfg.ChunkOverlap)
 				currentSection = updated
@@ -586,7 +586,6 @@ func parseMetadata(filePath string) docMetadata {
 
 	// Detect version from filename
 	matches := versionRegex.FindAllString(filename, -1)
-	log.Printf("  Version matches found in filename: %v", matches) // add this
 	for _, v := range matches {
 		if !strings.HasPrefix(v, "20") {
 			meta.version = v
@@ -608,13 +607,6 @@ func parseMetadata(filePath string) docMetadata {
 func chunkID(filename string, page, index int) string {
 	raw := fmt.Sprintf("%s::p%d::c%d", filename, page, index)
 	return fmt.Sprintf("%x", md5.Sum([]byte(raw)))
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 func sanitizeText(text string) string {
